@@ -20,6 +20,7 @@
 use crate::types::ProtocolNumber;
 use std::net::IpAddr;
 
+#[derive(PartialEq, Debug)]
 pub struct MapRequestPayload {
     pub nonce: [u8; 12],
     pub protocol: ProtocolNumber,

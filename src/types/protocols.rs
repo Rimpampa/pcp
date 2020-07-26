@@ -2,7 +2,7 @@ use std::convert::TryFrom;
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum ProtocolNumber {
-    /// IPv6 Hop-by-Hop Option, Y, [RFC8200]
+    /// IPv6 Hop-by-Hop Option, IPv6 extension header, [RFC8200]
     Hopopt = 0,
     /// Internet Control Message, [RFC792]
     Icmp = 1,
@@ -88,9 +88,9 @@ pub enum ProtocolNumber {
     Ipv6 = 41,
     /// Source Demand Routing Protocol, [Deborah_Estrin]
     Sdrp = 42,
-    /// Routing Header for IPv6, Y, [Steve_Deering]
+    /// Routing Header for IPv6, IPv6 extension header, [Steve_Deering]
     Ipv6Route = 43,
-    /// Fragment Header for IPv6, Y, [Steve_Deering]
+    /// Fragment Header for IPv6, IPv6 extension header, [Steve_Deering]
     Ipv6Frag = 44,
     /// Inter-Domain Routing Protocol, [Sue_Hares]
     Idrp = 45,
@@ -102,9 +102,9 @@ pub enum ProtocolNumber {
     Dsr = 48,
     /// BNA, [Gary Salamon]
     Bna = 49,
-    /// Encap Security Payload, Y, [RFC4303]
+    /// Encap Security Payload, IPv6 extension header, [RFC4303]
     Esp = 50,
-    /// Authentication Header, Y, [RFC4302]
+    /// Authentication Header, IPv6 extension header, [RFC4302]
     Ah = 51,
     /// Integrated Net Layer Security  TUBA, [K_Robert_Glenn]
     INlsp = 52,
@@ -122,7 +122,7 @@ pub enum ProtocolNumber {
     Ipv6Icmp = 58,
     /// No Next Header for IPv6, [RFC8200]
     Ipv6NoNxt = 59,
-    /// Destination Options for IPv6, Y, [RFC8200]
+    /// Destination Options for IPv6, IPv6 extension header, [RFC8200]
     Ipv6Opts = 60,
     /// any host internal protocol, [Internet_Assigned_Numbers_Authority]
     HostInternal = 61,
@@ -272,7 +272,7 @@ pub enum ProtocolNumber {
     Fc = 133,
     /// [RFC3175]
     RsvpE2eIgnore = 134,
-    /// Y, [RFC6275]
+    /// IPv6 extension header, [RFC6275]
     MobilityHeader = 135,
     /// [RFC3828]
     UdpLite = 136,
@@ -280,9 +280,9 @@ pub enum ProtocolNumber {
     MplsInIp = 137,
     /// MANET Protocols, [RFC5498]
     Manet = 138,
-    /// Host Identity Protocol, Y, [RFC7401]
+    /// Host Identity Protocol, IPv6 extension header, [RFC7401]
     Hip = 139,
-    /// Shim6 Protocol, Y, [RFC5533]
+    /// Shim6 Protocol, IPv6 extension header, [RFC5533]
     Shim6 = 140,
     /// Wrapped Encapsulating Security Payload, [RFC5840]
     Wesp = 141,
@@ -290,9 +290,9 @@ pub enum ProtocolNumber {
     Rohc = 142,
     /// "Ethernet (TEMPORARY - registered 2020-01-31,  expires 2021-01-31)", [draft-ietf-spring-srv6-network-programming]
     Ethernet = 143,
-    /// Use for experimentation and testing, Y, [RFC3692]
+    /// Use for experimentation and testing, IPv6 extension header, [RFC3692]
     Test1 = 253,
-    /// Use for experimentation and testing, Y, [RFC3692]
+    /// Use for experimentation and testing, IPv6 extension header, [RFC3692]
     Test2 = 254,
 }
 

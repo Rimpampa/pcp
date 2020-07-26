@@ -23,9 +23,3 @@ pub enum ParsingError {
     /// The option code (2nd) is not valid for that opcode (1st)
     InvalidOption(OpCode, OptionCode),
 }
-
-impl<T> From<ParsingError> for Result<T, ParsingError> {
-    fn from(val: ParsingError) -> Self {
-        Err(val)
-    }
-}

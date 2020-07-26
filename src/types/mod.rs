@@ -1,4 +1,3 @@
-// TODO: questi non dovrebbero essere pubblici
 mod headers;
 mod op_code;
 mod option_code;
@@ -13,21 +12,33 @@ pub use option_code::OptionCode;
 pub use parsing_error::ParsingError;
 pub use protocols::ProtocolNumber;
 pub use result_code::ResultCode;
-pub use slorp::{Parsable, Slorp};
 
-pub use headers::{OptionHeaderType, RequestHeader, ResponseHeaderType};
-pub use payloads::{OptionPayload, RequestPayload, ResponsePayload};
+pub use headers::*;
+pub use payloads::*;
 
-use headers::*;
-use payloads::*;
+// use headers::*;
+// use payloads::*;
 use std::convert::TryFrom;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-// /// Trait used in order to have mulitple parameters that are address of the same version (both IPv4
-// /// or both IPv6).
-// pub trait IpAddress: Into<IpAddr> {}
-// impl IpAddress for Ipv4Addr {}
-// impl IpAddress for Ipv6Addr {}
+pub trait Parsable {
+    type Parsed;
+    /// Parses the fields of the object
+    fn parse(&self) -> Self::Parsed;
+    // /// Returns the inner slice
+    // pub fn slice(&self) -> &[u8];
+}
+
+impl<P, S> Parsable for Vec<S>
+where
+    S: Parsable<Parsed = P>,
+{
+    type Parsed = Vec<P>;
+
+    fn parse(&self) -> Self::Parsed {
+        self.iter().map(|v| v.parse()).collect()
+    }
+}
 
 pub trait Ipv6Address {
     fn is_ipv6_mapped(&self) -> bool;
@@ -51,83 +62,101 @@ impl Ipv6Address for Ipv6Addr {
     }
 }
 
-pub struct PacketOption<'a> {
-    header: OptionHeaderType<'a>,
-    payload: OptionPayload<'a>,
+#[derive(PartialEq)]
+pub struct PacketOption {
+    pub header: OptionHeader,
+    pub payload: OptionPayload,
 }
 
-impl<'a> PacketOption<'a> {
-    fn new(header: OptionHeaderType<'a>, payload: OptionPayload<'a>) -> Self {
+impl PacketOption {
+    const fn new(header: OptionHeader, payload: OptionPayload) -> Self {
         Self { header, payload }
     }
 
     pub fn filter(prefix: u8, remote_port: u16, remote_address: IpAddr) -> Self {
         Self::new(
-            Slorp::Parsed(OptionHeader::filter()),
+            OptionHeader::filter(),
             OptionPayload::filter(prefix, remote_port, remote_address),
         )
     }
     pub fn third_party(address: IpAddr) -> Self {
         Self::new(
-            Slorp::Parsed(OptionHeader::third_party()),
+            OptionHeader::third_party(),
             OptionPayload::third_party(address),
         )
     }
     pub fn prefer_failure() -> Self {
-        Self::new(
-            Slorp::Parsed(OptionHeader::prefer_failure()),
-            OptionPayload::PreferFailure,
-        )
+        Self::new(OptionHeader::prefer_failure(), OptionPayload::PreferFailure)
     }
     /// Returns the size of the option
     pub fn size(&self) -> usize {
         OptionHeader::SIZE + self.payload.size()
     }
+}
+
+pub struct PacketOptionSlice<'a> {
+    header: OptionHeaderSlice<'a>,
+    payload: OptionPayloadSlice<'a>,
+}
+
+impl<'a> PacketOptionSlice<'a> {
+    /// Returns the size of the option
+    pub fn size(&self) -> usize {
+        OptionHeader::SIZE + self.payload.size()
+    }
     /// Returns a reference to the payload data of the packet
-    pub fn payload(&self) -> &OptionPayload<'a> {
+    pub fn payload(&self) -> &OptionPayloadSlice<'a> {
         &self.payload
     }
     /// Returns a reference to the header data of the packet
-    pub fn header(&self) -> &OptionHeaderType<'a> {
+    pub fn header(&self) -> &OptionHeaderSlice<'a> {
         &self.header
     }
 }
 
-impl<'a> TryFrom<&'a [u8]> for PacketOption<'a> {
+impl Parsable for PacketOptionSlice<'_> {
+    type Parsed = PacketOption;
+
+    fn parse(&self) -> Self::Parsed {
+        Self::Parsed {
+            header: self.header().parse(),
+            payload: self.payload().parse(),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a [u8]> for PacketOptionSlice<'a> {
     type Error = ParsingError;
 
     fn try_from(slice: &'a [u8]) -> Result<Self, Self::Error> {
         let header = OptionHeaderSlice::try_from(slice)?;
         let payload = match header.code() {
             // try to parse the filter option payload
-            OptionCode::Filter => Slorp::Slice(FilterOptionPayloadSlice::try_from(
-                &slice[OptionHeader::SIZE..],
-            )?)
-            .into(),
+            OptionCode::Filter => {
+                FilterOptionPayloadSlice::try_from(&slice[OptionHeader::SIZE..])?.into()
+            }
             // try to parse the third party option payload
-            OptionCode::ThirdParty => Slorp::Slice(ThirdPartyOptionPayloadSlice::try_from(
-                &slice[OptionHeader::SIZE..],
-            )?)
-            .into(),
+            OptionCode::ThirdParty => {
+                ThirdPartyOptionPayloadSlice::try_from(&slice[OptionHeader::SIZE..])?.into()
+            }
             // there is no payload, so just return the enum value
-            OptionCode::PreferFailure => OptionPayload::PreferFailure,
+            OptionCode::PreferFailure => OptionPayloadSlice::PreferFailure,
         };
-        Ok(Self {
-            header: Slorp::Slice(header),
+        Ok(PacketOptionSlice {
+            header: header,
             payload,
         })
     }
 }
 
-pub struct RequestPacket<'a> {
+pub struct RequestPacket {
     pub header: RequestHeader,
     pub payload: RequestPayload,
-    // maybe use Vec<PacketOption<'a>>
-    pub options: &'a[PacketOption<'a>],
+    pub options: Vec<PacketOption>,
 }
 
-impl<'a> RequestPacket<'a> {
-    fn new(header: RequestHeader, payload: RequestPayload, options: &'a[PacketOption<'a>]) -> Self {
+impl RequestPacket {
+    fn new(header: RequestHeader, payload: RequestPayload, options: Vec<PacketOption>) -> Self {
         Self {
             header,
             payload,
@@ -137,7 +166,7 @@ impl<'a> RequestPacket<'a> {
 
     // pub fn map<Ip: IpAddress>(
     pub fn map(
-		version: u8,
+        version: u8,
         lifetime: u32,
         internal_address: IpAddr,
         nonce: [u8; 12],
@@ -145,20 +174,20 @@ impl<'a> RequestPacket<'a> {
         internal_port: u16,
         external_port: u16,
         external_address: IpAddr,
-        options: &'a[PacketOption<'a>],
+        options: Vec<PacketOption>,
     ) -> Result<Self, ParsingError> {
-		// Check that the provided options are supported
+        // Check that the provided options are supported
         if let Some(o) = options
             .iter()
-            .map(|o| o.header().code())
+            .map(|o| o.header.code)
             .find(|o| !OpCode::Map.valid_option(o))
         {
-            ParsingError::InvalidOption(OpCode::Map, o).into()
-		}
-		// Check that the version is supported
-		else if version < 2 {
-			Err(ParsingError::VersionNotSupported(version))
-		} else {
+            Err(ParsingError::InvalidOption(OpCode::Map, o))
+        }
+        // Check that the version is supported
+        else if version < 2 {
+            Err(ParsingError::VersionNotSupported(version))
+        } else {
             Ok(Self::new(
                 RequestHeader::new(version, OpCode::Map, lifetime, internal_address),
                 MapRequestPayload::new(
@@ -175,69 +204,96 @@ impl<'a> RequestPacket<'a> {
     }
 
     pub fn peer(
-		version: u8,
-		lifetime: u32,
-		internal_address: IpAddr,
+        version: u8,
+        lifetime: u32,
+        internal_address: IpAddr,
         nonce: [u8; 12],
         protocol: Option<ProtocolNumber>,
         internal_port: u16,
         external_port: u16,
         external_address: IpAddr,
         remote_port: u16,
-		remote_address: IpAddr,
-		options: &'a[PacketOption<'a>]
-	) -> Result<Self, ParsingError> {
-		// Check that the provided options are supported
+        remote_address: IpAddr,
+        options: Vec<PacketOption>,
+    ) -> Result<Self, ParsingError> {
+        // Check that the provided options are supported
         if let Some(o) = options
             .iter()
-            .map(|o| o.header().code())
+            .map(|o| o.header.code)
             .find(|o| !OpCode::Peer.valid_option(o))
         {
-            ParsingError::InvalidOption(OpCode::Peer, o).into()
-		}
-		// Check that the version is supported
-		else if version < 2 {
-			Err(ParsingError::VersionNotSupported(version))
-		} else {
-			Ok(Self::new(
-				RequestHeader::new(version, OpCode::Peer, lifetime, internal_address),
-				PeerRequestPayload::new(nonce, protocol, internal_port, external_port, external_address, remote_port, remote_address).into(),
-				options
-			))
-		}
-	}
+            Err(ParsingError::InvalidOption(OpCode::Peer, o))
+        }
+        // Check that the version is supported
+        else if version < 2 {
+            Err(ParsingError::VersionNotSupported(version))
+        } else {
+            Ok(Self::new(
+                RequestHeader::new(version, OpCode::Peer, lifetime, internal_address),
+                PeerRequestPayload::new(
+                    nonce,
+                    protocol,
+                    internal_port,
+                    external_port,
+                    external_address,
+                    remote_port,
+                    remote_address,
+                )
+                .into(),
+                options,
+            ))
+        }
+    }
 
-	pub fn announce(version: u8, address: IpAddr) -> Self {
-		Self::new(
-			RequestHeader::new(version, OpCode::Announce, 0, address),
-			RequestPayload::announce(),
-			&[]
-		)
-	}
+    pub fn announce(version: u8, address: IpAddr) -> Self {
+        Self::new(
+            RequestHeader::new(version, OpCode::Announce, 0, address),
+            RequestPayload::announce(),
+            Vec::new(),
+        )
+    }
 }
 
-pub struct ResponsePacket<'a> {
-    header: ResponseHeaderType<'a>,
-    payload: ResponsePayload<'a>,
-    options: Vec<PacketOption<'a>>,
+pub struct ResponsePacket {
+    pub header: ResponseHeader,
+    pub payload: ResponsePayload,
+    pub options: Vec<PacketOption>,
 }
 
-impl<'a> ResponsePacket<'a> {
+pub struct ResponsePacketSlice<'a> {
+    header: ResponseHeaderSlice<'a>,
+    payload: ResponsePayloadSlice<'a>,
+    options: Vec<PacketOptionSlice<'a>>,
+}
+
+impl<'a> ResponsePacketSlice<'a> {
     /// Returns a reference to the options in the packets
-    pub fn options(&self) -> &Vec<PacketOption<'a>> {
+    pub fn options(&self) -> &Vec<PacketOptionSlice<'a>> {
         &self.options
     }
     /// Returns a reference to the payload data of the packet
-    pub fn payload(&self) -> &ResponsePayload<'a> {
+    pub fn payload(&self) -> &ResponsePayloadSlice<'a> {
         &self.payload
     }
     /// Returns a reference to the header data of the packet
-    pub fn header(&self) -> &ResponseHeaderType<'a> {
+    pub fn header(&self) -> &ResponseHeaderSlice<'a> {
         &self.header
     }
 }
 
-impl<'a> TryFrom<&'a [u8]> for ResponsePacket<'a> {
+impl Parsable for ResponsePacketSlice<'_> {
+    type Parsed = ResponsePacket;
+
+    fn parse(&self) -> Self::Parsed {
+        Self::Parsed {
+            header: self.header().parse(),
+            payload: self.payload.parse(),
+            options: self.options().parse(),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a [u8]> for ResponsePacketSlice<'a> {
     type Error = ParsingError;
 
     fn try_from(slice: &'a [u8]) -> Result<Self, Self::Error> {
@@ -249,26 +305,27 @@ impl<'a> TryFrom<&'a [u8]> for ResponsePacket<'a> {
         let opcode = header.opcode();
         // Check if the payload is valid
         let payload = match opcode {
-            OpCode::Map => Slorp::Slice(MapResponsePayloadSlice::try_from(&slice[at..])?).into(),
-            OpCode::Peer => Slorp::Slice(PeerResponsePayloadSlice::try_from(&slice[at..])?).into(),
-            OpCode::Announce => ResponsePayload::Announce,
+            OpCode::Map => MapResponsePayloadSlice::try_from(&slice[at..])?.into(),
+            OpCode::Peer => PeerResponsePayloadSlice::try_from(&slice[at..])?.into(),
+            OpCode::Announce => ResponsePayloadSlice::Announce,
         };
         let mut options = Vec::new();
         at += payload.size();
 
         // Check for possible options
         while at < slice.len() {
-            let option = PacketOption::try_from(&slice[at..])?;
+            let option = PacketOptionSlice::try_from(&slice[at..])?;
             // Check if the option is valid for this opcode
-            let option_code = &option.header().slice_ref().unwrap().code();
+            // As I'm parsing this slice, there is no way it could be
+            let option_code = &option.header().code();
             if !opcode.valid_option(option_code) {
-                return ParsingError::InvalidOption(opcode, *option_code).into();
+                return Err(ParsingError::InvalidOption(opcode, *option_code));
             }
             at += option.size();
             options.push(option);
         }
         Ok(Self {
-            header: Slorp::Slice(header),
+            header,
             payload,
             options,
         })

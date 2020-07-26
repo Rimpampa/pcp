@@ -12,11 +12,9 @@
     |                                                               |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
-use super::super::{Parsable, ParsingError, Slorp};
+use crate::types::{Parsable, ParsingError};
 use std::convert::{TryFrom, TryInto};
 use std::net::{IpAddr, Ipv6Addr};
-
-pub type FilterOptionType<'a> = Slorp<FilterOptionPayload, FilterOptionPayloadSlice<'a>>;
 
 #[derive(PartialEq, Debug)]
 pub struct FilterOptionPayload {
@@ -70,7 +68,14 @@ impl FilterOptionPayloadSlice<'_> {
     }
     /// Returns the address
     pub fn remote_address(&self) -> Ipv6Addr {
-        <[u8; 16]>::try_from(&self.slice[4..20]).unwrap().into()
+        match <[u8; 16]>::try_from(&self.slice[4..20]) {
+            Ok(arr) => arr.into(),
+            _ => unreachable!(),
+        }
+    }
+    /// Returns the inner slice
+    pub fn slice(&self) -> &[u8] {
+        self.slice
     }
 }
 
@@ -83,10 +88,6 @@ impl Parsable for FilterOptionPayloadSlice<'_> {
             remote_port: self.remote_port(),
             remote_address: self.remote_address().into(),
         }
-    }
-    /// Returns the inner slice
-    fn slice(&self) -> &[u8] {
-        self.slice
     }
 }
 

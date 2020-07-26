@@ -10,12 +10,9 @@
     |                                                               |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
-use crate::types::{Ipv6Address, Parsable, ParsingError, Slorp};
+use crate::types::{Ipv6Address, Parsable, ParsingError};
 use std::convert::TryFrom;
 use std::net::{IpAddr, Ipv6Addr};
-
-pub type ThirdPartyOptionType<'a> =
-    Slorp<ThirdPartyOptionPayload, ThirdPartyOptionPayloadSlice<'a>>;
 
 #[derive(PartialEq, Debug)]
 pub struct ThirdPartyOptionPayload {
@@ -49,6 +46,10 @@ impl ThirdPartyOptionPayloadSlice<'_> {
     pub fn address(&self) -> Ipv6Addr {
         <[u8; 16]>::try_from(&self.slice[..]).unwrap().into()
     }
+    /// Returns the inner slice
+    pub fn slice(&self) -> &[u8] {
+        self.slice
+    }
 }
 
 impl Parsable for ThirdPartyOptionPayloadSlice<'_> {
@@ -59,10 +60,6 @@ impl Parsable for ThirdPartyOptionPayloadSlice<'_> {
             address: self.address().true_form(),
         }
     }
-    /// Returns the inner slice
-    fn slice(&self) -> &[u8] {
-        self.slice
-    }
 }
 
 impl<'a> TryFrom<&'a [u8]> for ThirdPartyOptionPayloadSlice<'a> {
@@ -71,7 +68,9 @@ impl<'a> TryFrom<&'a [u8]> for ThirdPartyOptionPayloadSlice<'a> {
     fn try_from(slice: &'a [u8]) -> Result<ThirdPartyOptionPayloadSlice<'a>, Self::Error> {
         // The size of the slice must be at least 4
         if slice.len() < ThirdPartyOptionPayload::SIZE {
-            ParsingError::InvalidSliceLength(ThirdPartyOptionPayload::SIZE).into()
+            Err(ParsingError::InvalidSliceLength(
+                ThirdPartyOptionPayload::SIZE,
+            ))
         }
         // It's a valid header
         else {

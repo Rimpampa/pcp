@@ -24,10 +24,10 @@ use crate::types::OpCode;
 use std::net::IpAddr;
 
 pub struct RequestHeader {
-    version: u8,
-    opcode: OpCode, // MSb is always 1
-    lifetime: u32,
-    address: IpAddr,
+    pub version: u8,
+    pub opcode: OpCode,
+    pub lifetime: u32,
+    pub address: IpAddr,
 }
 
 impl RequestHeader {

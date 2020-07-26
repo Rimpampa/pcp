@@ -24,13 +24,11 @@
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
 
-use crate::types::{Parsable, ParsingError, ProtocolNumber, Slorp};
+use crate::types::{Parsable, ParsingError, ProtocolNumber};
 use std::convert::{TryFrom, TryInto};
 use std::net::Ipv6Addr;
 
-pub type PeerResponseType<'a> = Slorp<PeerResponsePayload, PeerResponsePayloadSlice<'a>>;
-
-#[derive(Debug)]
+#[derive(PartialEq, Debug)]
 pub struct PeerResponsePayload {
     pub nonce: [u8; 12],
     pub protocol: ProtocolNumber,
@@ -43,7 +41,7 @@ pub struct PeerResponsePayload {
 
 impl PeerResponsePayload {
     /// Size of the PCP map response payload (in bytes)
-    const SIZE: usize = 56;
+    pub const SIZE: usize = 56;
 }
 
 pub struct PeerResponsePayloadSlice<'a> {
@@ -81,6 +79,10 @@ impl PeerResponsePayloadSlice<'_> {
     pub fn remote_address(&self) -> Ipv6Addr {
         <[u8; 16]>::try_from(&self.slice[40..56]).unwrap().into()
     }
+    /// Returns the inner slice
+    pub fn slice(&self) -> &[u8] {
+        self.slice
+    }
 }
 
 impl Parsable for PeerResponsePayloadSlice<'_> {
@@ -97,10 +99,6 @@ impl Parsable for PeerResponsePayloadSlice<'_> {
             remote_address: self.remote_address(),
         }
     }
-    /// Returns the inner slice
-    fn slice(&self) -> &[u8] {
-        self.slice
-    }
 }
 
 impl<'a> TryFrom<&'a [u8]> for PeerResponsePayloadSlice<'a> {
@@ -108,9 +106,9 @@ impl<'a> TryFrom<&'a [u8]> for PeerResponsePayloadSlice<'a> {
 
     fn try_from(slice: &'a [u8]) -> Result<PeerResponsePayloadSlice<'a>, Self::Error> {
         if slice.len() < PeerResponsePayload::SIZE {
-            ParsingError::InvalidSliceLength(PeerResponsePayload::SIZE).into()
+            Err(ParsingError::InvalidSliceLength(PeerResponsePayload::SIZE))
         } else if ProtocolNumber::try_from(slice[12]).is_err() {
-            ParsingError::NotAProtocolNumber(slice[12]).into()
+            Err(ParsingError::NotAProtocolNumber(slice[12]))
         } else {
             Ok(PeerResponsePayloadSlice {
                 slice: &slice[..PeerResponsePayload::SIZE],

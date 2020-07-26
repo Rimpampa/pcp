@@ -19,42 +19,47 @@
     :             (optional) Options                                :
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
-use crate::types::{OpCode, Parsable, ParsingError, ResultCode, Slorp};
+use crate::types::{OpCode, Parsable, ParsingError, ResultCode};
 use std::convert::{TryFrom, TryInto};
 
-pub type ResponseHeaderType<'a> = Slorp<ResponseHeader, ResponseHeaderSlice<'a>>;
+// impl ResponseHeaderType<'_> {
+//     /// Returns the version number of the protocol being used
+//     pub fn version(&self) -> u8 {
+//         match self {
+//             Self::Parsed(val) => val.version,
+//             Self::Slice(val) => val.version(),
+//         }
+//     }
+//     /// Returns the operation code number (relative to the request previously made)
+//     pub fn opcode(&self) -> OpCode {
+//         match self {
+//             Self::Parsed(val) => val.opcode,
+//             Self::Slice(val) => val.opcode(),
+//         }
+//     }
+//     /// Returns the result code number of the request
+//     pub fn result_code(&self) -> ResultCode {
+//         match self {
+//             Self::Parsed(val) => val.result,
+//             Self::Slice(val) => val.result_code(),
+//         }
+//     }
+//     /// Returns the lifetime of the request. That is for how long it will remain valid.
+//     /// When it's an error it indicates for how long the same request will lead to an error
+//     pub fn lifetime(&self) -> u32 {
+//         match self {
+//             Self::Parsed(val) => val.lifetime,
+//             Self::Slice(val) => val.lifetime(),
+//         }
+//     }
 
-impl ResponseHeaderType<'_> {
-    /// Returns the version number of the protocol being used
-    pub fn version(&self) -> u8 {
-        match self {
-            Self::Parsed(val) => val.version,
-            Self::Slice(val) => val.version(),
-        }
-    }
-    /// Returns the operation code number (relative to the request previously made)
-    pub fn opcode(&self) -> OpCode {
-        match self {
-            Self::Parsed(val) => val.opcode,
-            Self::Slice(val) => val.opcode(),
-        }
-    }
-    /// Returns the result code number of the request
-    pub fn result_code(&self) -> ResultCode {
-        match self {
-            Self::Parsed(val) => val.result,
-            Self::Slice(val) => val.result_code(),
-        }
-    }
-    /// Returns the lifetime of the request. That is for how long it will remain valid.
-    /// When it's an error it indicates for how long the same request will lead to an error
-    pub fn lifetime(&self) -> u32 {
-        match self {
-            Self::Parsed(val) => val.lifetime,
-            Self::Slice(val) => val.lifetime(),
-        }
-    }
-}
+//     pub fn epoch(&self) -> u32 {
+//         match self {
+//             Self::Parsed(val) => val.epoch,
+//             Self::Slice(val) => val.epoch(),
+//         }
+//     }
+// }
 
 #[derive(PartialEq, Debug)]
 pub struct ResponseHeader {
@@ -82,10 +87,15 @@ impl ResponseHeaderSlice<'_> {
     }
     /// Returns the operation code number (relative to the request previously made)
     pub fn opcode(&self) -> OpCode {
-        (self.slice[1] & 0b_0111_1111).try_into().unwrap()
+        // The opcode has already been proven valid
+        match (self.slice[1] & 0b_0111_1111).try_into() {
+            Ok(opcode) => opcode,
+            _ => unreachable!(),
+        }
     }
     /// Returns the result code number of the request
     pub fn result_code(&self) -> ResultCode {
+        // The result code has already been proven valid
         self.slice[3].try_into().unwrap()
     }
     /// Returns the lifetime of the request. That is for how long it will remain valid.
@@ -96,6 +106,10 @@ impl ResponseHeaderSlice<'_> {
     /// [TODO]
     pub fn epoch(&self) -> u32 {
         u32::from_be_bytes(self.slice[8..12].try_into().unwrap())
+    }
+    /// Returns the inner slice
+    pub fn slice(&self) -> &[u8] {
+        self.slice
     }
 }
 
@@ -110,9 +124,6 @@ impl Parsable for ResponseHeaderSlice<'_> {
             lifetime: self.lifetime(),
             epoch: self.epoch(),
         }
-    }
-    fn slice(&self) -> &[u8] {
-        self.slice
     }
 }
 

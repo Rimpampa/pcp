@@ -8,27 +8,27 @@
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
 use crate::types::{
-    FilterOptionPayload, OptionCode, Parsable, ParsingError, Slorp, ThirdPartyOptionPayload,
+    FilterOptionPayload, OptionCode, Parsable, ParsingError, ThirdPartyOptionPayload,
 };
 use std::convert::{TryFrom, TryInto};
 
-pub type OptionHeaderType<'a> = Slorp<OptionHeader, OptionHeaderSlice<'a>>;
+// pub type OptionHeaderType<'a> = Slorp<OptionHeader, OptionHeaderSlice<'a>>;
 
-impl OptionHeaderType<'_> {
-    pub fn code(&self) -> OptionCode {
-        match self {
-            Self::Parsed(val) => val.code,
-            Self::Slice(val) => val.code(),
-        }
-    }
+// impl OptionHeaderType<'_> {
+//     pub fn code(&self) -> OptionCode {
+//         match self {
+//             Self::Parsed(val) => val.code,
+//             Self::Slice(val) => val.code(),
+//         }
+//     }
 
-    pub fn length(&self) -> u16 {
-        match self {
-            Self::Parsed(val) => val.length,
-            Self::Slice(val) => val.length(),
-        }
-    }
-}
+//     pub fn length(&self) -> u16 {
+//         match self {
+//             Self::Parsed(val) => val.length,
+//             Self::Slice(val) => val.length(),
+//         }
+//     }
+// }
 
 #[derive(PartialEq, Debug)]
 pub struct OptionHeader {
@@ -70,11 +70,17 @@ pub struct OptionHeaderSlice<'a> {
 impl OptionHeaderSlice<'_> {
     /// Returns the code number of the option
     pub fn code(&self) -> OptionCode {
+        // The option cose has already been proven valid
         self.slice[0].try_into().unwrap()
     }
     /// Returns the length of the option payload
     pub fn length(&self) -> u16 {
+        // There is no way a slice of 2 elements cannot be made into an array of two elements
         u16::from_be_bytes(self.slice[2..4].try_into().unwrap())
+    }
+    /// Returns the inner slice
+    pub fn slice(&self) -> &[u8] {
+        self.slice
     }
 }
 
@@ -87,10 +93,6 @@ impl Parsable for OptionHeaderSlice<'_> {
             length: self.length(),
         }
     }
-    /// Returns the inner slice
-    fn slice(&self) -> &[u8] {
-        self.slice
-    }
 }
 
 impl<'a> TryFrom<&'a [u8]> for OptionHeaderSlice<'a> {
@@ -99,26 +101,32 @@ impl<'a> TryFrom<&'a [u8]> for OptionHeaderSlice<'a> {
     fn try_from(slice: &'a [u8]) -> Result<OptionHeaderSlice<'a>, Self::Error> {
         // The size of the slice must be at least 4
         if slice.len() < OptionHeader::SIZE {
-            ParsingError::InvalidSliceLength(OptionHeader::SIZE).into()
+            Err(ParsingError::InvalidSliceLength(OptionHeader::SIZE))
         }
         // Check that the length specified in the header is correct
         else {
-            let length = u16::from_be_bytes(slice[2..4].try_into().unwrap());
+            // There is no way a slice of two elements cannot be made into an array of two elements
+            let length = u16::from_be_bytes(match slice[2..4].try_into() {
+                Ok(arr) => arr,
+                _ => unreachable!(),
+            });
             // This is done by looking for the size of the payload of that specific option code
             match OptionCode::try_from(slice[0])? {
                 OptionCode::Filter if length != FilterOptionPayload::SIZE as u16 => {
-                    ParsingError::InvalidOptionLength(OptionCode::Filter, FilterOptionPayload::SIZE)
-                        .into()
+                    Err(ParsingError::InvalidOptionLength(
+                        OptionCode::Filter,
+                        FilterOptionPayload::SIZE,
+                    ))
                 }
-                OptionCode::PreferFailure if length != 0 => {
-                    ParsingError::InvalidOptionLength(OptionCode::PreferFailure, 0).into()
-                }
+                OptionCode::PreferFailure if length != 0 => Err(ParsingError::InvalidOptionLength(
+                    OptionCode::PreferFailure,
+                    0,
+                )),
                 OptionCode::ThirdParty if length != FilterOptionPayload::SIZE as u16 => {
-                    ParsingError::InvalidOptionLength(
+                    Err(ParsingError::InvalidOptionLength(
                         OptionCode::ThirdParty,
                         ThirdPartyOptionPayload::SIZE,
-                    )
-                    .into()
+                    ))
                 }
                 // The option header is valid
                 _ => Ok(OptionHeaderSlice {

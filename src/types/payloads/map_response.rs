@@ -17,13 +17,11 @@
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
 
-use crate::types::{Ipv6Address, Parsable, ParsingError, ProtocolNumber, Slorp};
+use crate::types::{Ipv6Address, Parsable, ParsingError, ProtocolNumber};
 use std::convert::{TryFrom, TryInto};
 use std::net::{IpAddr, Ipv6Addr};
 
-pub type MapResponseType<'a> = Slorp<MapResponsePayload, MapResponsePayloadSlice<'a>>;
-
-#[derive(Debug)]
+#[derive(PartialEq, Debug)]
 pub struct MapResponsePayload {
     pub nonce: [u8; 12],
     pub protocol: ProtocolNumber,
@@ -34,7 +32,7 @@ pub struct MapResponsePayload {
 
 impl MapResponsePayload {
     /// Size of the PCP map response payload (in bytes)
-    const SIZE: usize = 36;
+    pub const SIZE: usize = 36;
 }
 
 pub struct MapResponsePayloadSlice<'a> {
@@ -61,7 +59,14 @@ impl MapResponsePayloadSlice<'_> {
     /// Returns the assigned external IP address. If it's an IPv4 mapping it will return the IPv6
     /// mapped IPv4 address (::ffff:a.b.c.d)
     pub fn external_address(&self) -> Ipv6Addr {
-        <[u8; 16]>::try_from(&self.slice[20..36]).unwrap().into()
+        match <[u8; 16]>::try_from(&self.slice[20..36]) {
+            Ok(arr) => arr.into(),
+            _ => unreachable!(),
+        }
+    }
+    /// Returns the inner slice
+    pub fn slice(&self) -> &[u8] {
+        self.slice
     }
 }
 
@@ -77,10 +82,6 @@ impl Parsable for MapResponsePayloadSlice<'_> {
             external_address: self.external_address().true_form(),
         }
     }
-    /// Returns the inner slice
-    fn slice(&self) -> &[u8] {
-        self.slice
-    }
 }
 
 impl<'a> TryFrom<&'a [u8]> for MapResponsePayloadSlice<'a> {
@@ -89,9 +90,9 @@ impl<'a> TryFrom<&'a [u8]> for MapResponsePayloadSlice<'a> {
     fn try_from(slice: &'a [u8]) -> Result<MapResponsePayloadSlice<'a>, Self::Error> {
         if slice.len() < MapResponsePayload::SIZE {
             // Err("The size of the slice is too small")
-            ParsingError::InvalidSliceLength(MapResponsePayload::SIZE).into()
+            Err(ParsingError::InvalidSliceLength(MapResponsePayload::SIZE))
         } else if ProtocolNumber::try_from(slice[12]).is_err() {
-            ParsingError::NotAProtocolNumber(slice[12]).into()
+            Err(ParsingError::NotAProtocolNumber(slice[12]))
         } else {
             Ok(MapResponsePayloadSlice {
                 slice: &slice[..MapResponsePayload::SIZE],
