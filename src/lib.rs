@@ -11,12 +11,13 @@ mod event;
 mod handle;
 mod map;
 mod state;
-mod types;
+pub mod types;
 
 pub use client::Client;
 pub use handle::{Error, Handle, Request};
 pub use map::{InboundMap, OutboundMap};
 pub use state::{Alert, MapHandle, State};
+pub use types::ProtocolNumber;
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 pub trait IpAddress: std::fmt::Debug + Send + Copy + Into<IpAddr> + 'static {
