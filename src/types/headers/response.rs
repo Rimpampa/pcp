@@ -103,7 +103,7 @@ impl ResponseHeaderSlice<'_> {
     pub fn lifetime(&self) -> u32 {
         u32::from_be_bytes(self.slice[4..8].try_into().unwrap())
     }
-    /// [TODO]
+    /// Returns the epoch time field
     pub fn epoch(&self) -> u32 {
         u32::from_be_bytes(self.slice[8..12].try_into().unwrap())
     }

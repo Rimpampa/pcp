@@ -12,7 +12,7 @@
     |                                                               |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
-use crate::types::{Parsable, ParsingError};
+use crate::types::{Ipv6Address, Parsable, ParsingError};
 use std::convert::{TryFrom, TryInto};
 use std::net::{IpAddr, Ipv6Addr};
 
@@ -67,9 +67,9 @@ impl FilterOptionPayloadSlice<'_> {
         u16::from_be_bytes(self.slice[2..4].try_into().unwrap())
     }
     /// Returns the address
-    pub fn remote_address(&self) -> Ipv6Addr {
+    pub fn remote_address(&self) -> IpAddr {
         match <[u8; 16]>::try_from(&self.slice[4..20]) {
-            Ok(arr) => arr.into(),
+            Ok(arr) => Ipv6Addr::from(arr).true_form(),
             _ => unreachable!(),
         }
     }
@@ -86,7 +86,7 @@ impl Parsable for FilterOptionPayloadSlice<'_> {
         FilterOptionPayload {
             prefix: self.prefix(),
             remote_port: self.remote_port(),
-            remote_address: self.remote_address().into(),
+            remote_address: self.remote_address(),
         }
     }
 }

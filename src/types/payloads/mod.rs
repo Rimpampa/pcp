@@ -16,7 +16,7 @@ use super::{Parsable, ProtocolNumber};
 use std::net::IpAddr;
 
 /// An enum containing a PCP option payload
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub enum OptionPayload {
     Filter(FilterOptionPayload),
     ThidParty(ThirdPartyOptionPayload),
@@ -118,6 +118,14 @@ pub enum RequestPayload {
 }
 
 impl RequestPayload {
+    pub fn size(&self) -> usize {
+        match self {
+            Self::Map(_) => MapRequestPayload::SIZE,
+            Self::Peer(_) => PeerRequestPayload::SIZE,
+            Self::Announce => 0,
+        }
+    }
+
     pub fn map(
         nonce: [u8; 12],
         protocol: Option<ProtocolNumber>,

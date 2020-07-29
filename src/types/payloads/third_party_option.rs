@@ -43,8 +43,8 @@ pub struct ThirdPartyOptionPayloadSlice<'a> {
 
 impl ThirdPartyOptionPayloadSlice<'_> {
     /// Returns the address
-    pub fn address(&self) -> Ipv6Addr {
-        <[u8; 16]>::try_from(&self.slice[..]).unwrap().into()
+    pub fn address(&self) -> IpAddr {
+        Ipv6Addr::from(<[u8; 16]>::try_from(&self.slice[..]).unwrap()).true_form()
     }
     /// Returns the inner slice
     pub fn slice(&self) -> &[u8] {
@@ -57,7 +57,7 @@ impl Parsable for ThirdPartyOptionPayloadSlice<'_> {
 
     fn parse(&self) -> Self::Parsed {
         ThirdPartyOptionPayload {
-            address: self.address().true_form(),
+            address: self.address(),
         }
     }
 }

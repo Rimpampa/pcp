@@ -122,7 +122,7 @@ impl<'a> TryFrom<&'a [u8]> for OptionHeaderSlice<'a> {
                     OptionCode::PreferFailure,
                     0,
                 )),
-                OptionCode::ThirdParty if length != FilterOptionPayload::SIZE as u16 => {
+                OptionCode::ThirdParty if length != ThirdPartyOptionPayload::SIZE as u16 => {
                     Err(ParsingError::InvalidOptionLength(
                         OptionCode::ThirdParty,
                         ThirdPartyOptionPayload::SIZE,

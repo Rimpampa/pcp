@@ -24,9 +24,9 @@
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
 
-use crate::types::{Parsable, ParsingError, ProtocolNumber};
+use crate::types::{Ipv6Address, Parsable, ParsingError, ProtocolNumber};
 use std::convert::{TryFrom, TryInto};
-use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv6Addr};
 
 #[derive(PartialEq, Debug)]
 pub struct PeerResponsePayload {
@@ -34,9 +34,9 @@ pub struct PeerResponsePayload {
     pub protocol: ProtocolNumber,
     pub internal_port: u16,
     pub external_port: u16,
-    pub external_address: Ipv6Addr,
+    pub external_address: IpAddr,
     pub remote_port: u16,
-    pub remote_address: Ipv6Addr,
+    pub remote_address: IpAddr,
 }
 
 impl PeerResponsePayload {
@@ -67,8 +67,8 @@ impl PeerResponsePayloadSlice<'_> {
     }
     /// Returns the assigned external IP address. If it's an IPv4 mapping it will return the IPv6
     /// mapped IPv4 address (::ffff:a.b.c.d)
-    pub fn external_address(&self) -> Ipv6Addr {
-        <[u8; 16]>::try_from(&self.slice[20..36]).unwrap().into()
+    pub fn external_address(&self) -> IpAddr {
+        Ipv6Addr::from(<[u8; 16]>::try_from(&self.slice[20..36]).unwrap()).true_form()
     }
     /// Returns the remote peer's port number
     pub fn remote_port(&self) -> u16 {
@@ -76,8 +76,8 @@ impl PeerResponsePayloadSlice<'_> {
     }
     // Returns the remote peer's IP address. If it's an IPv4 mapping it will return the IPv6
     /// mapped IPv4
-    pub fn remote_address(&self) -> Ipv6Addr {
-        <[u8; 16]>::try_from(&self.slice[40..56]).unwrap().into()
+    pub fn remote_address(&self) -> IpAddr {
+        Ipv6Addr::from(<[u8; 16]>::try_from(&self.slice[40..56]).unwrap()).true_form()
     }
     /// Returns the inner slice
     pub fn slice(&self) -> &[u8] {

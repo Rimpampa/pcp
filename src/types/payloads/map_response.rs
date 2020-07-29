@@ -58,9 +58,9 @@ impl MapResponsePayloadSlice<'_> {
     }
     /// Returns the assigned external IP address. If it's an IPv4 mapping it will return the IPv6
     /// mapped IPv4 address (::ffff:a.b.c.d)
-    pub fn external_address(&self) -> Ipv6Addr {
+    pub fn external_address(&self) -> IpAddr {
         match <[u8; 16]>::try_from(&self.slice[20..36]) {
-            Ok(arr) => arr.into(),
+            Ok(arr) => Ipv6Addr::from(arr).true_form(),
             _ => unreachable!(),
         }
     }
@@ -79,7 +79,7 @@ impl Parsable for MapResponsePayloadSlice<'_> {
             protocol: self.protocol(),
             internal_port: self.internal_port(),
             external_port: self.external_port(),
-            external_address: self.external_address().true_form(),
+            external_address: self.external_address(),
         }
     }
 }

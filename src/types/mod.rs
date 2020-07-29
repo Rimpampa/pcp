@@ -5,7 +5,6 @@ mod parsing_error;
 mod payloads;
 mod protocols;
 mod result_code;
-mod slorp;
 
 pub use op_code::OpCode;
 pub use option_code::OptionCode;
@@ -16,8 +15,6 @@ pub use result_code::ResultCode;
 pub use headers::*;
 pub use payloads::*;
 
-// use headers::*;
-// use payloads::*;
 use std::convert::TryFrom;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -62,7 +59,7 @@ impl Ipv6Address for Ipv6Addr {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub struct PacketOption {
     pub header: OptionHeader,
     pub payload: OptionPayload,
@@ -156,6 +153,31 @@ pub struct RequestPacket {
 }
 
 impl RequestPacket {
+    pub fn size(&self) -> usize {
+        RequestHeader::SIZE
+            + self.payload.size()
+            + self.options.iter().map(|o| o.size()).sum::<usize>()
+    }
+
+    pub fn bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(self.size());
+        buf.extend_from_slice(&self.header.bytes());
+        match &self.payload {
+            RequestPayload::Map(p) => buf.extend_from_slice(&p.bytes()),
+            RequestPayload::Peer(p) => buf.extend_from_slice(&p.bytes()),
+            RequestPayload::Announce => (),
+        };
+        self.options.iter().for_each(|o| {
+            buf.extend_from_slice(&o.header.bytes());
+            match &o.payload {
+                OptionPayload::PreferFailure => (),
+                OptionPayload::Filter(p) => buf.extend_from_slice(&p.bytes()),
+                OptionPayload::ThidParty(p) => buf.extend_from_slice(&p.bytes()),
+            }
+        });
+        buf
+    }
+
     fn new(header: RequestHeader, payload: RequestPayload, options: Vec<PacketOption>) -> Self {
         Self {
             header,
