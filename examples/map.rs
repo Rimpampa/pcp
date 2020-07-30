@@ -1,4 +1,4 @@
-use pcp::{Alert, Client, InboundMap, ProtocolNumber, Request};
+use pcp::{Alert, Client, InboundMap, ProtocolNumber, Request, RequestType};
 use std::net::Ipv4Addr;
 
 fn main() {
@@ -12,12 +12,15 @@ fn main() {
     let map = InboundMap::new(6000, 120).protocol(ProtocolNumber::Tcp);
 
     // Request the mapping
-    let handle = pcp.request(map).unwrap();
+    let handle = pcp.request(map, RequestType::Once).unwrap();
 
-	while let Ok(alert) = handle.wait() {
-		match alert {
-			Alert::StateChange => println!("State: {:?}", handle.state()),
-			Alert::Assigned(ip, port) => println!("Assigned ip: {:?}\nAssigned port: {}", ip, port),
-		}
-	}
+    while let Ok(alert) = handle.wait_alert() {
+        match alert {
+            Alert::StateChange => println!("State: {:?}", handle.state()),
+            Alert::Assigned(ip, port, lifetime) => println!(
+                "Assigned ip: {:?}\nAssigned port: {}\nAssigned lifetime: {}",
+                ip, port, lifetime
+            ),
+        }
+    }
 }

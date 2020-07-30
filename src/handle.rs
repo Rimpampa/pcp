@@ -63,19 +63,30 @@ impl<Ip: IpAddress> Handle<Ip> {
     }
 }
 
-// NOTE: I might want to switch to using Into<RequestPacket> instead of Map
+#[derive(Debug, PartialEq)]
+pub enum RequestType {
+    Once,
+    Repeat(usize),
+    KeepAlive,
+}
 
 pub trait Request<Ip: IpAddress, M: Map<Ip>> {
-    fn request(&self, map: M) -> Result<MapHandle<Ip>, Error>;
+    fn request(&self, map: M, kind: RequestType) -> Result<MapHandle<Ip>, Error>;
 }
 
 impl<Ip: IpAddress> Request<Ip, InboundMap<Ip>> for Handle<Ip> {
-    fn request(&self, map: InboundMap<Ip>) -> Result<MapHandle<Ip>, Error> {
+    fn request(&self, map: InboundMap<Ip>, kind: RequestType) -> Result<MapHandle<Ip>, Error> {
         let (id_tx, id_rx) = mpsc::channel();
         let (alert_tx, alert_rx) = mpsc::channel();
         let state = Arc::new(AtomicState::new(State::Requested));
         self.to_client
-            .send(Event::InboundMap(map, Arc::clone(&state), id_tx, alert_tx))
+            .send(Event::InboundMap(
+                map,
+                kind,
+                Arc::clone(&state),
+                id_tx,
+                alert_tx,
+            ))
             .unwrap();
         if let Some(id) = id_rx.recv().unwrap() {
             Ok(MapHandle::new(id, state, self.to_client.clone(), alert_rx))
@@ -86,12 +97,18 @@ impl<Ip: IpAddress> Request<Ip, InboundMap<Ip>> for Handle<Ip> {
 }
 
 impl<Ip: IpAddress> Request<Ip, OutboundMap<Ip>> for Handle<Ip> {
-    fn request(&self, map: OutboundMap<Ip>) -> Result<MapHandle<Ip>, Error> {
+    fn request(&self, map: OutboundMap<Ip>, kind: RequestType) -> Result<MapHandle<Ip>, Error> {
         let (id_tx, id_rx) = mpsc::channel();
         let (alert_tx, alert_rx) = mpsc::channel();
         let state = Arc::new(AtomicState::new(State::Requested));
         self.to_client
-            .send(Event::OutboundMap(map, Arc::clone(&state), id_tx, alert_tx))
+            .send(Event::OutboundMap(
+                map,
+                kind,
+                Arc::clone(&state),
+                id_tx,
+                alert_tx,
+            ))
             .unwrap();
         if let Some(id) = id_rx.recv().unwrap() {
             Ok(MapHandle::new(id, state, self.to_client.clone(), alert_rx))

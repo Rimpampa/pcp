@@ -1,4 +1,4 @@
-use super::handle::Error;
+use super::handle::{Error, RequestType};
 use super::map::{InboundMap, OutboundMap};
 use super::state::{Alert, AtomicState};
 use super::IpAddress;
@@ -46,6 +46,7 @@ pub enum Event<Ip: IpAddress> {
     /// the mapping
     InboundMap(
         InboundMap<Ip>,
+        RequestType,
         Arc<AtomicState>,
         mpsc::Sender<Option<usize>>,
         mpsc::Sender<Alert>,
@@ -54,6 +55,7 @@ pub enum Event<Ip: IpAddress> {
     /// the mapping
     OutboundMap(
         OutboundMap<Ip>,
+        RequestType,
         Arc<AtomicState>,
         mpsc::Sender<Option<usize>>,
         mpsc::Sender<Alert>,
@@ -65,7 +67,7 @@ pub enum Event<Ip: IpAddress> {
     /// The handler of the mapping has been dropped
     Drop(usize),
     /// A delay has ended
-    Delay(usize),
+    Delay(usize, Duration),
     /// The handler of the client has dropped or has requested to shutdown the service
     Shutdown,
     /// The listening thread generated an error
@@ -127,8 +129,6 @@ impl<Ip: IpAddress> Event<Ip> {
 /// An handle to a waiting thread: one the thread wait ends an event is sent
 pub struct Delay {
     signal: Option<mpsc::Sender<()>>,
-    /// The duration of the delay
-    pub duration: Duration,
 }
 
 impl Delay {
@@ -139,13 +139,10 @@ impl Delay {
         thread::spawn(move || {
             thread::sleep(time);
             if let Err(_) = rx.try_recv() {
-                channel.send(Event::Delay(id)).ok();
+                channel.send(Event::Delay(id, time)).ok();
             }
         });
-        Self {
-            signal: Some(tx),
-            duration: time,
-        }
+        Self { signal: Some(tx) }
     }
     /// Once called, the event won't be sent through the channel (thus ignoring it).
     /// If the event was already sent at the time of calling the method, or any other error

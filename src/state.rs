@@ -1,10 +1,13 @@
 use super::event::{Delay, Event};
+use super::handle::RequestType;
 use super::IpAddress;
 use crate::types::{RequestPacket, ResultCode};
 use std::net::IpAddr;
 use std::sync::mpsc::{self, RecvError};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+
+// TODO: mi serve lo stesso AtomicState dato che comunque invio un'alert quando cambia stato?
 
 /// A wrapper around the `State` enum that can be shared as modified between threads safely
 #[derive(Debug)]
@@ -27,7 +30,7 @@ impl AtomicState {
 
 pub enum Alert {
     StateChange,
-    Assigned(IpAddr, u16),
+    Assigned(IpAddr, u16, u32),
 }
 
 /// The state of a mapping
@@ -35,10 +38,11 @@ pub enum Alert {
 pub enum State {
     /// The request is sent but the client still hasn't processed it
     Requested,
-    /// The request has been sent to the server for the first time
-    Starting,
-    /// The message has been retrasmitted for the nth time
-    Retrying(usize),
+    /// The message has been retrasmitted for the Nth time, the value is N
+    Starting(usize),
+    /// The request is being resent for the Nth in order to keep in alive,
+    /// the first value is N and the last value is the lifetime
+    Updating(usize, u32),
     /// The server sends a `Success` response
     Running,
     /// The server sends an error response
@@ -63,6 +67,8 @@ pub struct MappingState {
     pub request: RequestPacket,
     /// Request data as a `Vec<u8>`
     pub buffer: Option<Vec<u8>>,
+    /// Type of request
+    pub kind: RequestType,
 }
 
 impl MappingState {
@@ -72,6 +78,7 @@ impl MappingState {
         request: RequestPacket,
         delay: Delay,
         buffer: Option<Vec<u8>>,
+        kind: RequestType,
     ) -> Self {
         MappingState {
             to_handle,
@@ -79,6 +86,7 @@ impl MappingState {
             request,
             delay,
             buffer,
+            kind,
         }
     }
     /// Sets the state of the mapping an alerts the handle of a state change
@@ -133,8 +141,12 @@ impl<Ip: IpAddress> MapHandle<Ip> {
         self.to_client.send(Event::Revoke(self.id)).ok();
     }
     /// Waits for an alert to arrive
-    pub fn wait(&self) -> Result<Alert, RecvError> {
+    pub fn wait_alert(&self) -> Result<Alert, RecvError> {
         self.from_client.recv()
+    }
+    /// Returns the first alert received if there is one
+    pub fn poll_alert(&self) -> Option<Alert> {
+        self.from_client.try_recv().ok()
     }
 }
 

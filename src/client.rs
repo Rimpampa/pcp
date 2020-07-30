@@ -1,5 +1,5 @@
 use super::event::{Delay, Event};
-use super::handle::{Error, Handle};
+use super::handle::{Error, Handle, RequestType};
 use super::state::{Alert, MappingState, State};
 use super::IpAddress;
 use crate::types::{
@@ -153,31 +153,35 @@ impl<Ip: IpAddress> Client<Ip> {
         let event_source = &self.event_source;
         // Reset the state and start the new timer for each mapping
         self.mappings.iter_mut().enumerate().for_each(|(id, map)| {
-            map.set_state(State::Starting);
+            map.set_state(State::Starting(0));
             map.delay = Delay::by(Self::generate_irt(rng), id, event_source.clone());
         });
         Ok(())
     }
 
-    /// Retry to send the packet
-    fn retry(
-        sock: &UdpSocket,
+    fn update_mapping(
         rng: &mut ThreadRng,
-        tx: mpsc::Sender<Event<Ip>>,
         mapping: &mut MappingState,
         id: usize,
+        times: usize,
+        sock: &UdpSocket,
+        tx: mpsc::Sender<Event<Ip>>,
     ) -> Result<(), Error> {
-        // Resend the packet
-        if let Some(ref buffer) = mapping.buffer {
-            sock.send(buffer).map_err(Error::from)?;
-        } else {
-            let buffer = mapping.request.bytes();
-            sock.send(&buffer).map_err(Error::from)?;
-            mapping.buffer = Some(buffer);
+        match Self::jitter_lifetime(rng, mapping.request.header.lifetime, times) {
+            Some(delay) => {
+                // Resend the request
+                if let Some(ref buf) = mapping.buffer {
+                    sock.send(buf).map_err(Error::from)?;
+                } else {
+                    let buf = mapping.request.bytes();
+                    sock.send(&buf).map_err(Error::from)?;
+                    mapping.buffer = Some(buf);
+                }
+                mapping.set_state(State::Updating(times, mapping.request.header.lifetime));
+                mapping.delay = Delay::by(delay, id, tx);
+            }
+            None => mapping.set_state(State::Expired),
         }
-        // Restart the timer
-        let waited = mapping.delay.duration;
-        mapping.delay = Delay::by(Self::generate_rt(rng, waited), id, tx);
         Ok(())
     }
 
@@ -200,6 +204,26 @@ impl<Ip: IpAddress> Client<Ip> {
     /// RT = (1 + RAND) * MIN (2 * RTprev, MRT)
     fn generate_rt(rng: &mut ThreadRng, rt_prev: Duration) -> Duration {
         Duration::from_secs_f32(Self::one_plus_rand(rng) * MRT.min(2.0 * rt_prev.as_secs_f32()))
+    }
+
+    /// Computes the duration needed to wait for the retrasmission of a keepalive request
+    fn jitter_lifetime(rng: &mut ThreadRng, lifetime: u32, times: usize) -> Option<Duration> {
+        let ftime = if times == 0 {
+            // (1/2)~(5/8) --> 1/2 + 0~1 * 1/8
+            0.5 + rng.gen::<f32>() * 0.125
+        } else {
+            // Not sure of this formula, it's not explicitly written in the specification
+            // n = number of attempts (subsequent to the first)
+            // (2^(n+1)-1)/2^(n+1) + 0~1 * 1/(2^(n+3))
+            let denom = 4 << times;
+            let base = (denom - 1) as f32 / denom as f32;
+            base + rng.gen::<f32>() / (8 << times) as f32
+        };
+        if ftime < 4.0 {
+            None
+        } else {
+            Some(Duration::from_secs_f32(ftime))
+        }
     }
 
     /// Function used as a catch for the errors that might be generated while running the client
@@ -225,8 +249,8 @@ impl<Ip: IpAddress> Client<Ip> {
         loop {
             match self.event_receiver.recv().map_err(Error::from)? {
                 // The handler request an inbound mapping
-                Event::InboundMap(map, state, handle_id, handle_alert) => {
-                    state.set(State::Starting);
+                Event::InboundMap(map, kind, state, handle_id, handle_alert) => {
+                    state.set(State::Starting(0));
 
                     // Get the index of this mapping
                     let opt_idx = self.next_index();
@@ -290,6 +314,7 @@ impl<Ip: IpAddress> Client<Ip> {
                             self.event_source.clone(),
                         ),
                         Some(buf),
+                        kind,
                     );
 
                     // Insert the mapping in the vector
@@ -299,8 +324,8 @@ impl<Ip: IpAddress> Client<Ip> {
                     }
                 }
                 // The handler request an outbound mapping
-                Event::OutboundMap(map, state, handle_id, handle_alert) => {
-                    state.set(State::Starting);
+                Event::OutboundMap(map, kind, state, handle_id, handle_alert) => {
+                    state.set(State::Starting(0));
 
                     // Get the index of this mapping
                     let opt_idx = self.next_index();
@@ -347,6 +372,7 @@ impl<Ip: IpAddress> Client<Ip> {
                             self.event_source.clone(),
                         ),
                         Some(buf),
+                        kind,
                     );
 
                     // Insert the mapping in the vector
@@ -394,7 +420,7 @@ impl<Ip: IpAddress> Client<Ip> {
                     self.socket.send(&buf).map_err(Error::from)?;
                     mapping.buffer = Some(buf);
 
-                    mapping.set_state(State::Starting);
+                    mapping.set_state(State::Starting(0));
                     mapping.delay = Delay::by(
                         Self::generate_irt(&mut self.rng),
                         id,
@@ -402,36 +428,65 @@ impl<Ip: IpAddress> Client<Ip> {
                     );
                 }
                 // A delay has ended
-                Event::Delay(id) => {
+                Event::Delay(id, waited) => {
                     let mapping = &mut self.mappings[id];
                     match mapping.get_state() {
-                        // The mapping was in a starting state, this means that the packet was sent
-                        // but the server didn't respond, thus the client will try to send it again
-                        State::Starting => {
-                            mapping.set_state(State::Retrying(1));
-                            Self::retry(
-                                &self.socket,
-                                &mut self.rng,
-                                self.event_source.clone(),
-                                mapping,
+                        // The mapping was in a starting state, this means that the packet was
+                        // already been sent n times but the server, still, didn't respond, thus
+                        // the client will try to send it again
+                        State::Starting(n) => {
+                            mapping.set_state(State::Starting(n + 1));
+                            // Resend the packet
+                            if let Some(ref buffer) = mapping.buffer {
+                                self.socket.send(buffer).map_err(Error::from)?;
+                            } else {
+                                let buffer = mapping.request.bytes();
+                                self.socket.send(&buffer).map_err(Error::from)?;
+                                mapping.buffer = Some(buffer);
+                            }
+                            // Restart the timer
+                            mapping.delay = Delay::by(
+                                Self::generate_rt(&mut self.rng, waited),
                                 id,
-                            )?;
-                        }
-                        // The mapping was in a retrying state, this means that the packet has
-                        // already been sent n times but still the server didn't respond,
-                        // thus the client will try to send it again
-                        State::Retrying(n) => {
-                            mapping.set_state(State::Retrying(n + 1));
-                            Self::retry(
-                                &self.socket,
-                                &mut self.rng,
                                 self.event_source.clone(),
-                                mapping,
-                                id,
-                            )?;
+                            );
                         }
                         // If it's running it means that the lifetime has ended
-                        State::Running => mapping.set_state(State::Expired),
+                        State::Running => match mapping.kind {
+                            RequestType::Once | RequestType::Repeat(0) => {
+                                mapping.set_state(State::Expired)
+                            }
+                            RequestType::Repeat(n) => {
+                                mapping.kind = RequestType::Repeat(n - 1);
+
+                                Self::update_mapping(
+                                    &mut self.rng,
+                                    mapping,
+                                    id,
+                                    0,
+                                    &self.socket,
+                                    self.event_source.clone(),
+                                )?;
+                            }
+                            RequestType::KeepAlive => Self::update_mapping(
+                                &mut self.rng,
+                                mapping,
+                                id,
+                                0,
+                                &self.socket,
+                                self.event_source.clone(),
+                            )?,
+                        },
+                        State::Updating(n, lifetime) => {
+                            Self::update_mapping(
+                                &mut self.rng,
+                                mapping,
+                                id,
+                                n + 1,
+                                &self.socket,
+                                self.event_source.clone(),
+                            )?;
+                        }
                         _ => (),
                     }
                 }
@@ -488,14 +543,21 @@ impl<Ip: IpAddress> Client<Ip> {
                                     mapping.alert(Alert::Assigned(
                                         payload.external_address,
                                         payload.external_port,
+                                        lifetime,
                                     ));
 
+                                    let wait = match mapping.kind {
+                                        RequestType::Once | RequestType::Repeat(0) => {
+                                            Duration::from_secs(lifetime as u64)
+                                        }
+                                        RequestType::KeepAlive | RequestType::Repeat(_) => {
+                                            Self::jitter_lifetime(&mut self.rng, lifetime, 0)
+                                                .unwrap_or(Duration::from_secs(0))
+                                        }
+                                    };
+
                                     // Set the delay for when it expires
-                                    mapping.delay = Delay::by(
-                                        Duration::from_secs(mapping.request.header.lifetime as u64),
-                                        id,
-                                        self.event_source.clone(),
-                                    )
+                                    mapping.delay = Delay::by(wait, id, self.event_source.clone())
                                 }
                                 // On an error response, se the state of the mapping
                                 error => mapping.set_state(State::Error(error)),
@@ -552,12 +614,19 @@ impl<Ip: IpAddress> Client<Ip> {
                                     }
                                     // After a success response the mapping is running
                                     mapping.set_state(State::Running);
+
+                                    let wait = match mapping.kind {
+                                        RequestType::Once | RequestType::Repeat(0) => {
+                                            Duration::from_secs(lifetime as u64)
+                                        }
+                                        RequestType::KeepAlive | RequestType::Repeat(_) => {
+                                            Self::jitter_lifetime(&mut self.rng, lifetime, 0)
+                                                .unwrap_or(Duration::from_secs(0))
+                                        }
+                                    };
+
                                     // Set the delay for when it expires
-                                    mapping.delay = Delay::by(
-                                        Duration::from_secs(mapping.request.header.lifetime as u64),
-                                        id,
-                                        self.event_source.clone(),
-                                    )
+                                    mapping.delay = Delay::by(wait, id, self.event_source.clone())
                                 }
                                 // On an error response, se the state of the mapping
                                 error => mapping.set_state(State::Error(error)),
