@@ -208,7 +208,7 @@ impl<Ip: IpAddress> Client<Ip> {
 
     /// Computes the duration needed to wait for the retrasmission of a keepalive request
     fn jitter_lifetime(rng: &mut ThreadRng, lifetime: u32, times: usize) -> Option<Duration> {
-        let ftime = if times == 0 {
+        let ftime = lifetime as f32 * if times == 0 {
             // (1/2)~(5/8) --> 1/2 + 0~1 * 1/8
             0.5 + rng.gen::<f32>() * 0.125
         } else {
