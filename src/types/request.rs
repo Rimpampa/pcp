@@ -1,85 +1,140 @@
-/*
-     0                   1                   2                   3
-     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |  Version = 2  |R|   Opcode    |         Reserved              |
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |                 Requested Lifetime (32 bits)                  |
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |                                                               |
-    |            PCP Client's IP Address (128 bits)                 |
-    |                                                               |
-    |                                                               |
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    :                                                               :
-    :             (optional) Opcode-specific information            :
-    :                                                               :
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    :                                                               :
-    :             (optional) PCP Options                            :
-    :                                                               :
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-*/
-use crate as pcp;
+use crate::types::headers::RequestHeader;
+use crate::types::payloads::{
+    MapRequestPayload, OptionPayload, PeerRequestPayload, RequestPayload,
+};
+use crate::types::{OpCode, PacketOption, ParsingError, ProtocolNumber};
 use std::net::IpAddr;
 
-#[repr(C)]
-struct RequestHeader {
-    version: u8,
-    opcode: u8,    // MSb is always 1
-    reserved: u16, // MUST be 0
-    lifetime: u32,
+/// A properly constructed PCP `RequestPacket` containing a `RequestHeader`
+/// a `RequestPayload` and some `PacketOption`s.
+///
+/// There is a limit on the number of options (more specifically on the size
+/// of the packet) but on this struct you can add as many of them as you want,
+/// the check will be done once the request is submitted.
+///
+/// There are three types of requests: `map`, `peer` and `announce`.
+pub struct RequestPacket {
+    pub header: RequestHeader,
+    pub payload: RequestPayload,
+    pub options: Vec<PacketOption>,
 }
 
-pub struct Request<'a> {
-    header: RequestHeader,
-    payload: &'a [u8],
-    options: &'a [pcp::Option<'a>],
-}
+impl RequestPacket {
+    /// Returns the size in bytes of the request
+    pub fn size(&self) -> usize {
+        RequestHeader::SIZE
+            + self.payload.size()
+            + self.options.iter().map(PacketOption::size).sum::<usize>()
+    }
 
-impl Request<'_> {}
+    /// Returns the byte array containing the request packet formatted correctly
+    pub fn bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(self.size());
+        buf.extend_from_slice(&self.header.bytes());
+        match &self.payload {
+            RequestPayload::Map(p) => buf.extend_from_slice(&p.bytes()),
+            RequestPayload::Peer(p) => buf.extend_from_slice(&p.bytes()),
+            RequestPayload::Announce => (),
+        };
+        self.options.iter().for_each(|o| {
+            buf.extend_from_slice(&o.header.bytes());
+            match &o.payload {
+                OptionPayload::PreferFailure => (),
+                OptionPayload::Filter(p) => buf.extend_from_slice(&p.bytes()),
+                OptionPayload::ThidParty(p) => buf.extend_from_slice(&p.bytes()),
+            }
+        });
+        buf
+    }
 
-/*
-     0                   1                   2                   3
-     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |                                                               |
-    |                 Mapping Nonce (96 bits)                       |
-    |                                                               |
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |   Protocol    |          Reserved (24 bits)                   |
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |        Internal Port          |    Suggested External Port    |
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    |                                                               |
-    |           Suggested External IP Address (128 bits)            |
-    |                                                               |
-    |                                                               |
-    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-*/
-pub struct Map {
-    nonce: [u8; 12],
-    protocol: u8,
-    reserved: [u8; 3], // MUST be 0
-    int_port: u16,
-    ext_port: u16, // (suggested)
-    ext_addr: IpAddr, // (suggested)
-}
-
-impl Map {
+    /// Constructs a PCP map request
     pub fn map(
+        version: u8,
+        lifetime: u32,
+        internal_address: IpAddr,
+        nonce: [u8; 12],
+        protocol: Option<ProtocolNumber>,
         internal_port: u16,
-        protocol: pcp::ProtocolNumber,
-        external_addr: Option<IpAddr>,
-        external_port: Option<u16>,
-    ) -> Map {
-        Map {
-            nonce: [0; 12],
-            protocol,
-            reserved: [0; 3],
-            int_port: internal_port,
-            ext_port: external_port.unwrap_or(0),
-            ext_addr: external_addr.unwrap_or(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED)),
+        external_port: u16,
+        external_address: IpAddr,
+        options: Vec<PacketOption>,
+    ) -> Result<Self, ParsingError> {
+        // Check that the provided options are supported
+        if let Some(o) = options
+            .iter()
+            .map(|o| o.header.code)
+            .find(|o| !OpCode::Map.valid_option(o))
+        {
+            Err(ParsingError::InvalidOption(OpCode::Map, o))
+        }
+        // Check that the version is supported
+        else if version < 2 {
+            Err(ParsingError::VersionNotSupported(version))
+        } else {
+            Ok(Self {
+                header: RequestHeader::new(version, OpCode::Map, lifetime, internal_address),
+                payload: MapRequestPayload::new(
+                    nonce,
+                    protocol,
+                    internal_port,
+                    external_port,
+                    external_address,
+                )
+                .into(),
+                options,
+            })
+        }
+    }
+
+    /// Constructs a PCP peer request
+    pub fn peer(
+        version: u8,
+        lifetime: u32,
+        internal_address: IpAddr,
+        nonce: [u8; 12],
+        protocol: Option<ProtocolNumber>,
+        internal_port: u16,
+        external_port: u16,
+        external_address: IpAddr,
+        remote_port: u16,
+        remote_address: IpAddr,
+        options: Vec<PacketOption>,
+    ) -> Result<Self, ParsingError> {
+        // Check that the provided options are supported
+        if let Some(o) = options
+            .iter()
+            .map(|o| o.header.code)
+            .find(|o| !OpCode::Peer.valid_option(o))
+        {
+            Err(ParsingError::InvalidOption(OpCode::Peer, o))
+        }
+        // Check that the version is supported
+        else if version < 2 {
+            Err(ParsingError::VersionNotSupported(version))
+        } else {
+            Ok(Self {
+                header: RequestHeader::new(version, OpCode::Peer, lifetime, internal_address),
+                payload: PeerRequestPayload::new(
+                    nonce,
+                    protocol,
+                    internal_port,
+                    external_port,
+                    external_address,
+                    remote_port,
+                    remote_address,
+                )
+                .into(),
+                options,
+            })
+        }
+    }
+
+    /// Constructs a PCP announce request
+    pub fn announce(version: u8, address: IpAddr) -> Self {
+        Self {
+            header: RequestHeader::new(version, OpCode::Announce, 0, address),
+            payload: RequestPayload::announce(),
+            options: Vec::new(),
         }
     }
 }

@@ -1,5 +1,6 @@
 use std::convert::TryFrom;
 
+/// All the IP protocol numbers defined by the IANA
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum ProtocolNumber {
     /// IPv6 Hop-by-Hop Option, IPv6 extension header, [RFC8200]

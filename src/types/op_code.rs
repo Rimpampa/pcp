@@ -1,6 +1,11 @@
 use super::{OptionCode, ParsingError};
 use std::convert::TryFrom;
 
+/// The `OpCode` field contained in the PCP response and request headers.
+///
+/// _On requests_: it indicates the operation that the server has to perform.
+///
+/// _On responses_: it's the same of the request it's responding to.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OpCode {
     Announce = 0,
@@ -10,7 +15,7 @@ pub enum OpCode {
 
 impl OpCode {
     /// Returns the array containing all the valid option codes for this opcode
-    pub fn valid_options(&self) -> &'static [OptionCode] {
+    pub const fn valid_options(&self) -> &'static [OptionCode] {
         use OptionCode as oc;
         match self {
             Self::Announce => &[],

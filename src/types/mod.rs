@@ -1,29 +1,67 @@
-mod headers;
+//! This module defines all the structs representing PCP response and request
+//! packets and the fields contained in them.
+//!
+//! # Parsing
+//!
+//! Every type that may be retrieved from the network (all the response types)
+//! have a *-Sliced* counterpart that serves as a zero-copy type that just
+//! checks if the provided slice is valid and provides methods to access the
+//! fields.
+//!
+//! All those types implement the `Parsable` trait so that they can be copied
+//! into a struct where the fields can be accessed directly.
+//!
+//! # Sending
+//!
+//! Every data type that is owned has a `bytes` method that returns a correctly
+//! formatted byte array representing that data, that can be directly be sent
+//! to the PCP server. For the slice types, only the ones that are composed of a
+//! single slice have the `slice` methods that returns the inner slice, which
+//! can be directly used to send the data, the others have to be parsed first or
+//! the fields have to be accessed one at the time.
+//!
+//! # Recieving
+//!
+//! When a slice of data is received for the network it can then be made into a
+//! -Slice data type via the `try_from` method, as each of them implements the
+//! `TryFrom` trait (from std), that checks if the data is valid for that type
+//! and returns a `Result` that can lead to a `ParsingError` if the data is not
+//! valid
+
+// TODO: make the slice types composed of more slices single sliced, and add unchecked variants of try_from
+
+// TODO: (maybe) use unsafe code to remove unnecessary checks
+
+pub mod headers;
 mod op_code;
+mod option;
 mod option_code;
 mod parsing_error;
-mod payloads;
+pub mod payloads;
 mod protocols;
+mod request;
+mod response;
 mod result_code;
 
 pub use op_code::OpCode;
+pub use option::{PacketOption, PacketOptionSlice};
 pub use option_code::OptionCode;
 pub use parsing_error::ParsingError;
 pub use protocols::ProtocolNumber;
+pub use request::RequestPacket;
+pub use response::{ResponsePacket, ResponsePacketSlice};
 pub use result_code::ResultCode;
 
-pub use headers::*;
-pub use payloads::*;
-
+use headers::*;
+use payloads::*;
 use std::convert::TryFrom;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+/// This trait is used to parse non-copy version of PCP data formats into owned types
 pub trait Parsable {
     type Parsed;
-    /// Parses the fields of the object
+    /// Parses the fields of the data
     fn parse(&self) -> Self::Parsed;
-    // /// Returns the inner slice
-    // pub fn slice(&self) -> &[u8];
 }
 
 impl<P, S> Parsable for Vec<S>
@@ -33,323 +71,35 @@ where
     type Parsed = Vec<P>;
 
     fn parse(&self) -> Self::Parsed {
-        self.iter().map(|v| v.parse()).collect()
+        self.iter().map(S::parse).collect()
     }
 }
 
+/// Simple trait to add methods to the Ipv6Addr type
 pub trait Ipv6Address {
-    fn is_ipv6_mapped(&self) -> bool;
-    fn true_form(self) -> IpAddr;
+    /// Tells if an IPv6 address is an IPv4-mapped IPv6 address
+    fn is_mapped(&self) -> bool;
+    /// Returns the IPv4 address contained in an IPv4-mapped IPv6 address,
+    /// or the IPv6 address if it's not mapped
+    fn unmap(self) -> IpAddr;
 }
 
 impl Ipv6Address for Ipv6Addr {
-    fn is_ipv6_mapped(&self) -> bool {
+    fn is_mapped(&self) -> bool {
         match self.octets() {
+            // IPv4-mapped IPv6 addresses are of the form ::ffff:a.b.c.d
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, _, _, _, _] => true,
             _ => false,
         }
     }
-    fn true_form(self) -> IpAddr {
+
+    fn unmap(self) -> IpAddr {
         match self.octets() {
+            // IPv4-mapped IPv6 addresses have to form ::ffff:a.b.c.d
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, a, b, c, d] => {
                 IpAddr::V4(Ipv4Addr::new(a, b, c, d))
             }
             _ => IpAddr::V6(self),
         }
-    }
-}
-
-#[derive(PartialEq, Debug)]
-pub struct PacketOption {
-    pub header: OptionHeader,
-    pub payload: OptionPayload,
-}
-
-impl PacketOption {
-    const fn new(header: OptionHeader, payload: OptionPayload) -> Self {
-        Self { header, payload }
-    }
-
-    pub fn filter(prefix: u8, remote_port: u16, remote_address: IpAddr) -> Self {
-        Self::new(
-            OptionHeader::filter(),
-            OptionPayload::filter(prefix, remote_port, remote_address),
-        )
-    }
-    pub fn third_party(address: IpAddr) -> Self {
-        Self::new(
-            OptionHeader::third_party(),
-            OptionPayload::third_party(address),
-        )
-    }
-    pub fn prefer_failure() -> Self {
-        Self::new(OptionHeader::prefer_failure(), OptionPayload::PreferFailure)
-    }
-    /// Returns the size of the option
-    pub fn size(&self) -> usize {
-        OptionHeader::SIZE + self.payload.size()
-    }
-}
-
-pub struct PacketOptionSlice<'a> {
-    header: OptionHeaderSlice<'a>,
-    payload: OptionPayloadSlice<'a>,
-}
-
-impl<'a> PacketOptionSlice<'a> {
-    /// Returns the size of the option
-    pub fn size(&self) -> usize {
-        OptionHeader::SIZE + self.payload.size()
-    }
-    /// Returns a reference to the payload data of the packet
-    pub fn payload(&self) -> &OptionPayloadSlice<'a> {
-        &self.payload
-    }
-    /// Returns a reference to the header data of the packet
-    pub fn header(&self) -> &OptionHeaderSlice<'a> {
-        &self.header
-    }
-}
-
-impl Parsable for PacketOptionSlice<'_> {
-    type Parsed = PacketOption;
-
-    fn parse(&self) -> Self::Parsed {
-        Self::Parsed {
-            header: self.header().parse(),
-            payload: self.payload().parse(),
-        }
-    }
-}
-
-impl<'a> TryFrom<&'a [u8]> for PacketOptionSlice<'a> {
-    type Error = ParsingError;
-
-    fn try_from(slice: &'a [u8]) -> Result<Self, Self::Error> {
-        let header = OptionHeaderSlice::try_from(slice)?;
-        let payload = match header.code() {
-            // try to parse the filter option payload
-            OptionCode::Filter => {
-                FilterOptionPayloadSlice::try_from(&slice[OptionHeader::SIZE..])?.into()
-            }
-            // try to parse the third party option payload
-            OptionCode::ThirdParty => {
-                ThirdPartyOptionPayloadSlice::try_from(&slice[OptionHeader::SIZE..])?.into()
-            }
-            // there is no payload, so just return the enum value
-            OptionCode::PreferFailure => OptionPayloadSlice::PreferFailure,
-        };
-        Ok(PacketOptionSlice {
-            header: header,
-            payload,
-        })
-    }
-}
-
-pub struct RequestPacket {
-    pub header: RequestHeader,
-    pub payload: RequestPayload,
-    pub options: Vec<PacketOption>,
-}
-
-impl RequestPacket {
-    pub fn size(&self) -> usize {
-        RequestHeader::SIZE
-            + self.payload.size()
-            + self.options.iter().map(|o| o.size()).sum::<usize>()
-    }
-
-    pub fn bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(self.size());
-        buf.extend_from_slice(&self.header.bytes());
-        match &self.payload {
-            RequestPayload::Map(p) => buf.extend_from_slice(&p.bytes()),
-            RequestPayload::Peer(p) => buf.extend_from_slice(&p.bytes()),
-            RequestPayload::Announce => (),
-        };
-        self.options.iter().for_each(|o| {
-            buf.extend_from_slice(&o.header.bytes());
-            match &o.payload {
-                OptionPayload::PreferFailure => (),
-                OptionPayload::Filter(p) => buf.extend_from_slice(&p.bytes()),
-                OptionPayload::ThidParty(p) => buf.extend_from_slice(&p.bytes()),
-            }
-        });
-        buf
-    }
-
-    fn new(header: RequestHeader, payload: RequestPayload, options: Vec<PacketOption>) -> Self {
-        Self {
-            header,
-            payload,
-            options,
-        }
-    }
-
-    // pub fn map<Ip: IpAddress>(
-    pub fn map(
-        version: u8,
-        lifetime: u32,
-        internal_address: IpAddr,
-        nonce: [u8; 12],
-        protocol: Option<ProtocolNumber>,
-        internal_port: u16,
-        external_port: u16,
-        external_address: IpAddr,
-        options: Vec<PacketOption>,
-    ) -> Result<Self, ParsingError> {
-        // Check that the provided options are supported
-        if let Some(o) = options
-            .iter()
-            .map(|o| o.header.code)
-            .find(|o| !OpCode::Map.valid_option(o))
-        {
-            Err(ParsingError::InvalidOption(OpCode::Map, o))
-        }
-        // Check that the version is supported
-        else if version < 2 {
-            Err(ParsingError::VersionNotSupported(version))
-        } else {
-            Ok(Self::new(
-                RequestHeader::new(version, OpCode::Map, lifetime, internal_address),
-                MapRequestPayload::new(
-                    nonce,
-                    protocol,
-                    internal_port,
-                    external_port,
-                    external_address,
-                )
-                .into(),
-                options,
-            ))
-        }
-    }
-
-    pub fn peer(
-        version: u8,
-        lifetime: u32,
-        internal_address: IpAddr,
-        nonce: [u8; 12],
-        protocol: Option<ProtocolNumber>,
-        internal_port: u16,
-        external_port: u16,
-        external_address: IpAddr,
-        remote_port: u16,
-        remote_address: IpAddr,
-        options: Vec<PacketOption>,
-    ) -> Result<Self, ParsingError> {
-        // Check that the provided options are supported
-        if let Some(o) = options
-            .iter()
-            .map(|o| o.header.code)
-            .find(|o| !OpCode::Peer.valid_option(o))
-        {
-            Err(ParsingError::InvalidOption(OpCode::Peer, o))
-        }
-        // Check that the version is supported
-        else if version < 2 {
-            Err(ParsingError::VersionNotSupported(version))
-        } else {
-            Ok(Self::new(
-                RequestHeader::new(version, OpCode::Peer, lifetime, internal_address),
-                PeerRequestPayload::new(
-                    nonce,
-                    protocol,
-                    internal_port,
-                    external_port,
-                    external_address,
-                    remote_port,
-                    remote_address,
-                )
-                .into(),
-                options,
-            ))
-        }
-    }
-
-    pub fn announce(version: u8, address: IpAddr) -> Self {
-        Self::new(
-            RequestHeader::new(version, OpCode::Announce, 0, address),
-            RequestPayload::announce(),
-            Vec::new(),
-        )
-    }
-}
-
-pub struct ResponsePacket {
-    pub header: ResponseHeader,
-    pub payload: ResponsePayload,
-    pub options: Vec<PacketOption>,
-}
-
-pub struct ResponsePacketSlice<'a> {
-    header: ResponseHeaderSlice<'a>,
-    payload: ResponsePayloadSlice<'a>,
-    options: Vec<PacketOptionSlice<'a>>,
-}
-
-impl<'a> ResponsePacketSlice<'a> {
-    /// Returns a reference to the options in the packets
-    pub fn options(&self) -> &Vec<PacketOptionSlice<'a>> {
-        &self.options
-    }
-    /// Returns a reference to the payload data of the packet
-    pub fn payload(&self) -> &ResponsePayloadSlice<'a> {
-        &self.payload
-    }
-    /// Returns a reference to the header data of the packet
-    pub fn header(&self) -> &ResponseHeaderSlice<'a> {
-        &self.header
-    }
-}
-
-impl Parsable for ResponsePacketSlice<'_> {
-    type Parsed = ResponsePacket;
-
-    fn parse(&self) -> Self::Parsed {
-        Self::Parsed {
-            header: self.header().parse(),
-            payload: self.payload.parse(),
-            options: self.options().parse(),
-        }
-    }
-}
-
-impl<'a> TryFrom<&'a [u8]> for ResponsePacketSlice<'a> {
-    type Error = ParsingError;
-
-    fn try_from(slice: &'a [u8]) -> Result<Self, Self::Error> {
-        // Check if the header is valid
-        let header = ResponseHeaderSlice::try_from(slice)?;
-
-        let mut at = ResponseHeader::SIZE;
-
-        let opcode = header.opcode();
-        // Check if the payload is valid
-        let payload = match opcode {
-            OpCode::Map => MapResponsePayloadSlice::try_from(&slice[at..])?.into(),
-            OpCode::Peer => PeerResponsePayloadSlice::try_from(&slice[at..])?.into(),
-            OpCode::Announce => ResponsePayloadSlice::Announce,
-        };
-        let mut options = Vec::new();
-        at += payload.size();
-
-        // Check for possible options
-        while at < slice.len() {
-            let option = PacketOptionSlice::try_from(&slice[at..])?;
-            // Check if the option is valid for this opcode
-            // As I'm parsing this slice, there is no way it could be
-            let option_code = &option.header().code();
-            if !opcode.valid_option(option_code) {
-                return Err(ParsingError::InvalidOption(opcode, *option_code));
-            }
-            at += option.size();
-            options.push(option);
-        }
-        Ok(Self {
-            header,
-            payload,
-            options,
-        })
     }
 }

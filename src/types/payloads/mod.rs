@@ -1,3 +1,5 @@
+//! This module contains all the payloads described in the RFC
+
 mod filter_option;
 mod map_request;
 mod map_response;
@@ -16,6 +18,8 @@ use super::{Parsable, ProtocolNumber};
 use std::net::IpAddr;
 
 /// An enum containing a PCP option payload
+///
+/// Currently supported option payloads are: filter, third party and prefer failure.
 #[derive(PartialEq, Debug)]
 pub enum OptionPayload {
     Filter(FilterOptionPayload),
@@ -23,16 +27,18 @@ pub enum OptionPayload {
     PreferFailure,
 }
 
-/// An enum containing a PCP option payload
 impl OptionPayload {
-    pub fn size(&self) -> usize {
+    /// Returns the size in bytes of the payload
+    pub const fn size(&self) -> usize {
         match self {
             Self::Filter(_) => FilterOptionPayload::SIZE,
             Self::ThidParty(_) => ThirdPartyOptionPayload::SIZE,
             Self::PreferFailure => 0,
         }
     }
-    pub fn filter(prefix: u8, remote_port: u16, remote_address: IpAddr) -> Self {
+
+    /// Constructs a new filter option payload (see `FilterOptionPayload`)
+    pub const fn filter(prefix: u8, remote_port: u16, remote_address: IpAddr) -> Self {
         Self::Filter(FilterOptionPayload::new(
             prefix,
             remote_port,
@@ -40,11 +46,13 @@ impl OptionPayload {
         ))
     }
 
-    pub fn third_party(address: IpAddr) -> Self {
+    /// Constructs a new third party option payload (see `ThirdPartyOptionPayload`)
+    pub const fn third_party(address: IpAddr) -> Self {
         Self::ThidParty(ThirdPartyOptionPayload::new(address))
     }
 
-    pub fn prefer_failure() -> Self {
+    /// Constructs a new prefer failure option payload
+    pub const fn prefer_failure() -> Self {
         Self::PreferFailure
     }
 }
@@ -61,7 +69,9 @@ impl From<ThirdPartyOptionPayload> for OptionPayload {
     }
 }
 
-/// An enum containing a PCP option payload
+/// A zero-copy type containing a valid PCP option payload. It can be obtained via the
+/// `try_from` method (from the `std::TryFrom` trait) from a slice containing
+/// a valid sequence of bytes.
 pub enum OptionPayloadSlice<'a> {
     Filter(FilterOptionPayloadSlice<'a>),
     ThidParty(ThirdPartyOptionPayloadSlice<'a>),
@@ -69,15 +79,17 @@ pub enum OptionPayloadSlice<'a> {
 }
 
 impl OptionPayloadSlice<'_> {
-    pub fn size(&self) -> usize {
+    /// Returns the size in bytes of the option payload
+    pub const fn size(&self) -> usize {
         match self {
             Self::Filter(_) => FilterOptionPayload::SIZE,
             Self::ThidParty(_) => ThirdPartyOptionPayload::SIZE,
             Self::PreferFailure => 0,
         }
     }
+
     /// Returns the inner slice
-    pub fn slice(&self) -> &[u8] {
+    pub const fn slice(&self) -> &[u8] {
         match self {
             Self::Filter(p) => p.slice(),
             Self::PreferFailure => &[],
@@ -111,6 +123,8 @@ impl<'a> From<ThirdPartyOptionPayloadSlice<'a>> for OptionPayloadSlice<'a> {
 }
 
 /// An enum containing a PCP request payload
+///
+/// Currently supported request payloads are: map, peer and announce
 pub enum RequestPayload {
     Map(MapRequestPayload),
     Peer(PeerRequestPayload),
@@ -118,7 +132,8 @@ pub enum RequestPayload {
 }
 
 impl RequestPayload {
-    pub fn size(&self) -> usize {
+    /// Returns the size in bytes of the request payload
+    pub const fn size(&self) -> usize {
         match self {
             Self::Map(_) => MapRequestPayload::SIZE,
             Self::Peer(_) => PeerRequestPayload::SIZE,
@@ -126,6 +141,7 @@ impl RequestPayload {
         }
     }
 
+    /// Constructs a new map request payload (see `MapRequestPayload`)
     pub fn map(
         nonce: [u8; 12],
         protocol: Option<ProtocolNumber>,
@@ -143,6 +159,7 @@ impl RequestPayload {
         .into()
     }
 
+    /// Constructs a new peer request payload (see `PeerRequestPayload`)
     pub fn peer(
         nonce: [u8; 12],
         protocol: Option<ProtocolNumber>,
@@ -164,6 +181,7 @@ impl RequestPayload {
         .into()
     }
 
+    /// Constructs a new announce request payload
     pub fn announce() -> Self {
         Self::Announce
     }
@@ -182,6 +200,8 @@ impl From<PeerRequestPayload> for RequestPayload {
 }
 
 /// An enum containing a PCP response payload
+///
+/// Currently supported response payloads are: map, peer and announce.
 pub enum ResponsePayload {
     Map(MapResponsePayload),
     Peer(PeerResponsePayload),
@@ -189,7 +209,8 @@ pub enum ResponsePayload {
 }
 
 impl ResponsePayload {
-    pub fn size(&self) -> usize {
+    /// Returns the size in bytes of the response payload
+    pub const fn size(&self) -> usize {
         match self {
             Self::Map(_) => MapRequestPayload::SIZE,
             Self::Announce => 0,
@@ -198,7 +219,9 @@ impl ResponsePayload {
     }
 }
 
-/// An enum containing a PCP response payload
+/// A zero-copy type containing a valid PCP response payload. It can be obtained via the
+/// `try_from` method (from the `std::TryFrom` trait) from a slice containing
+/// a valid sequence of bytes.
 pub enum ResponsePayloadSlice<'a> {
     Map(MapResponsePayloadSlice<'a>),
     Peer(PeerResponsePayloadSlice<'a>),
@@ -206,7 +229,8 @@ pub enum ResponsePayloadSlice<'a> {
 }
 
 impl ResponsePayloadSlice<'_> {
-    pub fn size(&self) -> usize {
+    /// Returns the size in bytes of the response payload
+    pub const fn size(&self) -> usize {
         match self {
             Self::Map(_) => MapResponsePayload::SIZE,
             Self::Announce => 0,

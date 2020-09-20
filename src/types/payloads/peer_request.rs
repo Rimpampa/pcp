@@ -1,4 +1,8 @@
-/*
+//! # Format
+//!
+//! The RFC defines the following format for the peer request payload:
+/*!
+
      0                   1                   2                   3
      0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -22,11 +26,16 @@
     |                                                               |
     |                                                               |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
 */
 
 use crate::types::ProtocolNumber;
 use std::net::IpAddr;
 
+/// A correctly formed `PeerRequestPayload` containing a nonce, the `ProtocolNumber` relative
+/// to the protocol that will be used by this mapping, the internal port from which the PCP client
+/// will receive incoming packets, *suggested* external port and address, that the PCP server will
+/// try to use for receiving packets from the remote hosts and the remote host port and address.
 #[derive(PartialEq, Debug)]
 pub struct PeerRequestPayload {
     pub nonce: [u8; 12],
@@ -42,9 +51,8 @@ impl PeerRequestPayload {
     /// Size of the PCP peer request payload (in bytes)
     pub const SIZE: usize = 56;
 
-    /// Creates a new peer request payload. If the external_port is not known use 0, same goes for
-    /// the external_ip, if it's not known use the UNSPECIFIED address of the relative version.
-    // pub fn new<Ip: IpAddress>(
+    /// Creates a new peer request payload. If the _external_port_ is not known use 0, same goes for
+    /// the _external_ip_, if it's not known use the `UNSPECIFIED` address of the relative version.
     pub fn new(
         nonce: [u8; 12],
         protocol: Option<ProtocolNumber>,
@@ -66,16 +74,17 @@ impl PeerRequestPayload {
         }
     }
 
+    /// Creates a correctly formatted byte array representing the payload
 	#[rustfmt::skip]
     pub fn bytes(&self) -> [u8; Self::SIZE] {
 		let int_port = self.internal_port.to_be_bytes();
 		let ext_port = self.external_port.to_be_bytes();
 		let rem_port = self.remote_port.to_be_bytes();
-		let ext_ip = match self.external_address.into() {
+		let ext_ip = match self.external_address {
 			IpAddr::V4(ip) => ip.to_ipv6_mapped(),
 			IpAddr::V6(ip) => ip,
 		}.octets();
-		let rem_ip = match self.remote_address.into() {
+		let rem_ip = match self.remote_address {
 			IpAddr::V4(ip) => ip.to_ipv6_mapped(),
 			IpAddr::V6(ip) => ip,
 		}.octets();

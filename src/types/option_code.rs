@@ -1,6 +1,9 @@
 use super::ParsingError;
 use std::convert::TryFrom;
 
+/// The `OptionCode` field contained in the PCP option header (see `OptionHeader`)
+///
+/// Currently only three option codes are defined
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OptionCode {
     /// Indicates the MAP or PEER request is for a host other than the host sending the PCP option

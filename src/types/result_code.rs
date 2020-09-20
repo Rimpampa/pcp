@@ -2,6 +2,7 @@ use super::ParsingError;
 use std::convert::TryFrom;
 use std::fmt;
 
+/// The `ResultCode` field contained in the PCP response packets, in the header (see `ResponseHeader`)
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ResultCode {
     /// Success
@@ -40,7 +41,7 @@ pub enum ResultCode {
 }
 
 impl ResultCode {
-    pub fn explain(&self) -> &'static str {
+    pub const fn explain(&self) -> &'static str {
         use ResultCode::*;
 
         match self {

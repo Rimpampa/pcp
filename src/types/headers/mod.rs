@@ -1,3 +1,5 @@
+//! This module contains all the headers described in the RFC
+
 mod option;
 mod request;
 mod response;

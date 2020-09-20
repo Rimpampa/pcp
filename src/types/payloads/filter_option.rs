@@ -1,4 +1,8 @@
-/*
+//! # Format
+//!
+//! The RFC defines the following format for the filter option payload:
+/*!
+
      0                   1                   2                   3
      0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -11,11 +15,27 @@
     |                                                               |
     |                                                               |
     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
 */
+//! **Reserved**:
+//! 8 reserved bits, MUST be sent as 0 and MUST be ignored when received.
+//!
+//! **Prefix Length**:
+//!     indicates how many bits of the IPv4 or IPv6 address
+//!     are relevant for this filter. The value 0 indicates "no filter",
+//!     and will remove all previous filters.
+//!
+//! **Remote Peer Port**:
+//!     the port number of the remote peer. The value 0 indicates "all ports".
+//!
+//! **Remote Peer IP address**: The IP address of the remote peer.
+
 use crate::types::{Ipv6Address, Parsable, ParsingError};
 use std::convert::{TryFrom, TryInto};
 use std::net::{IpAddr, Ipv6Addr};
 
+/// A correctly formed PCP `FilterOptionPayload` containing a prefeix,
+/// the port number and address of the remote host
 #[derive(PartialEq, Debug)]
 pub struct FilterOptionPayload {
     pub prefix: u8,
@@ -38,7 +58,7 @@ impl FilterOptionPayload {
 
 	#[rustfmt::skip]
     pub fn bytes(&self) -> [u8; Self::SIZE] {
-		let rem_ip = match self.remote_address.into() {
+		let rem_ip = match self.remote_address {
 			IpAddr::V4(ip) => ip.to_ipv6_mapped(),
 			IpAddr::V6(ip) => ip,
 		}.octets();
@@ -53,13 +73,16 @@ impl FilterOptionPayload {
 	}
 }
 
+/// A zero-copy type containing a valid PCP filter option payload. It can be obtained
+/// via the `try_from` method (from the `std::TryFrom` trait) from a slice containing
+/// a valid sequence of bytes.
 pub struct FilterOptionPayloadSlice<'a> {
     slice: &'a [u8],
 }
 
 impl FilterOptionPayloadSlice<'_> {
     /// Returns the number of bits that get checked by the filter
-    pub fn prefix(&self) -> u8 {
+    pub const fn prefix(&self) -> u8 {
         self.slice[1]
     }
     /// Returns the port that gets filtered
@@ -69,12 +92,12 @@ impl FilterOptionPayloadSlice<'_> {
     /// Returns the address
     pub fn remote_address(&self) -> IpAddr {
         match <[u8; 16]>::try_from(&self.slice[4..20]) {
-            Ok(arr) => Ipv6Addr::from(arr).true_form(),
+            Ok(arr) => Ipv6Addr::from(arr).unmap(),
             _ => unreachable!(),
         }
     }
     /// Returns the inner slice
-    pub fn slice(&self) -> &[u8] {
+    pub const fn slice(&self) -> &[u8] {
         self.slice
     }
 }
