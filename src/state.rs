@@ -7,7 +7,9 @@ use std::sync::mpsc::{self, RecvError};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-// TODO: mi serve lo stesso AtomicState dato che comunque invio un'alert quando cambia stato?
+// TODO: do I need AtomicState if I send an Alert?
+
+// TODO: don't use .ok()
 
 /// A wrapper around the `State` enum that can be shared as modified between threads safely
 #[derive(Debug)]
@@ -28,6 +30,8 @@ impl AtomicState {
     }
 }
 
+/// A notitification sent when the state of a mapping changes
+/// or when the external address selected by the server is recieved
 pub enum Alert {
     StateChange,
     Assigned(IpAddr, u16, u32),
@@ -89,15 +93,18 @@ impl MappingState {
             kind,
         }
     }
+
     /// Sets the state of the mapping an alerts the handle of a state change
     pub fn set_state(&self, state: State) {
         self.state.set(state);
         self.to_handle.send(Alert::StateChange).ok();
     }
+
     /// Returns the state of the mapping
     pub fn get_state(&self) -> State {
         self.state.get()
     }
+
     /// Sends an alert to the handle
     pub fn alert(&self, alert: Alert) {
         self.to_handle.send(alert).ok();
@@ -128,22 +135,27 @@ impl<Ip: IpAddress> MapHandle<Ip> {
             from_client,
         }
     }
+
     /// Returns the state of the mapping
     pub fn state(&self) -> State {
         self.state.get()
     }
+
     /// Requests to renew the mapping for the specified lifetime
     pub fn renew(&self, lifetime: u32) {
         self.to_client.send(Event::Renew(self.id, lifetime)).ok();
     }
+
     /// Requests to revoke the mapping
     pub fn revoke(&self) {
         self.to_client.send(Event::Revoke(self.id)).ok();
     }
+
     /// Waits for an alert to arrive
     pub fn wait_alert(&self) -> Result<Alert, RecvError> {
         self.from_client.recv()
     }
+
     /// Returns the first alert received if there is one
     pub fn poll_alert(&self) -> Option<Alert> {
         self.from_client.try_recv().ok()

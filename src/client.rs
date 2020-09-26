@@ -1,9 +1,83 @@
+//! The `Client` is the heart of the system, it operates on an independent thread
+//! and it's what implements the actual protocol.
+//!
+//! # Initialization
+//!
+//! A `Client` operates on a single stack, that means only with IPv4 addresses or
+//! only with IPv6 ones. It's created by calling the `start` method, and, once is
+//! called, the main thread is started but also other two threads get created,
+//! each will wait for incoming packets form the specified address: one will listen
+//! on the unicast address of the PCP server and the other on the _all hosts_
+//! multicast group (224.0.0.1). The latter one is used by the PCP server to
+//! communicate a failure in the system and/or a reboot of the device.
+//! The `start` function then returns an `Handle` which will then be used to
+//! request mappings and the state of the client.
+//!
+//! The newly created `Client` state is made of:
+//! - an empty vector which will be used to store the state of the requested
+//! mappings;
+//! - the thread local RNG that will be used for some timings calculation and nonce
+//! generation;
+//! - a `Reciever` for the events and a `Sender` for notifying the `Handle`;
+//! - a copy of the event sender for creating delayied events;
+//! - the socket and the address to send the requests;
+//!
+//! # Internal Workings
+//!
+//! Once it's started the main thread waits for events incoming from the listening
+//! threads or from the `Handle`, or from the client itself. At the start nothing
+//! is expected to come from the listening threads as no request has been made
+//! (only in the case the server has some issues this will happen) so the only
+//! source of events is the `Handle`.
+//!
+//! When a mapping is request the client constructs a new `MappingState` containing
+//! the informations of that mapping and adds it to it's list, while also sending
+//! the request to the server. The list may have some empty spots in it left by
+//! dropped mappings, so when adding a new mapping, those places are filled first,
+//! otherwise the list is expanded.
+//!
+//! > **Side Note**
+//! >
+//! > The list of the mappings never shrinks, and that might be a problem so I
+//! > might want to change it to an `HashMap`
+//!
+//! Another thing is done while reqesting a new maping, and that is to start a
+//! timer that waits for a specific amount of time (defined by the RFC) after which
+//! the request is sended again and another timer is started with a longer
+//! duration. This process repeats until the server responds or a maximum number of
+//! times is reached, after which the request is considered to be `Expired`. Before
+//! becoming `Running` once the server responds, or `Expired` when it doesn't, the
+//! mapping is in the `Starting` state.
+//!
+//! _(maybe move this to the State module)_
+//!
+//! When the mapping is finally `Running` another timer is started that lasts for
+//! it's lifetime. The duration of this timer depends on the requested amount of
+//! times it has to leave, which can be finate (`Repeat(n)` or `Once`) or endelss
+//! (`KeepAlive`). In the latter two cases the time to wait has to be smaller than
+//! the actual lifetime has the renewal is not immidiate.
+//!
+//! _(maybe remove `Once` as it's the same as Repeat(1))_
+//!
+//! # The Epoch and Recovery
+//!
+//! Every time a response is received a check is made on the server epoch to verify
+//! that the server didn't lose it's state. In the case that the check fails the
+//! state of the server has to be updated, thus all the currently active mappings
+//! have to be resent. The correct thing to do might be to send the requests with
+//! the lifetime decreased to the amount left before the error, but in reality it
+//! can't be determined the exact moment of failure thus they are sent again with
+//! their full lifetime.
+//!
+//! The recovery procedure is actuated, also, when an _unsolicited announce response_
+//! arrives, which means that the server had some problems and lost it's state.
+
 use super::event::{Delay, Event};
 use super::handle::{Error, Handle, RequestType};
 use super::state::{Alert, MappingState, State};
 use super::IpAddress;
 use crate::types::{
-    OpCode, PacketOption, RequestPacket, RequestPayload, ResponsePacketSlice, ResultCode,
+    payloads::RequestPayload, OpCode, PacketOption, RequestPacket, ResponsePacketSlice, ResultCode,
 };
 use rand::rngs::ThreadRng;
 use rand::{Rng, RngCore};
@@ -13,7 +87,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, UdpSocket};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-// TODO: aggiungi possibilità di modificarlo
+// TODO: allow modifying those values
 
 /// Initial Retrasmission Time
 const IRT: f32 = 3.0;
@@ -22,7 +96,34 @@ const MRT: f32 = 1024.0;
 /// Maximum Retrasmission Count (0 = infinite)
 const MRC: usize = 0;
 
-/// This structure holds the data needed to the client for imlementing the protocol
+/// A daemon thread that implements the PCP protocol (client-side).
+///
+/// After `start`ing a `Client` an `Handle` is returned that can be used
+/// to submit requests and check its state
+///
+/// A `Client` works only with IPv4 addresses or only with IPv6 addresses
+///
+/// **Note**: RFC 7488 explains a procedure to follow for the address selection
+/// of the PCP client address and the PCP server one, but it's not (yet)
+/// implemented and those adderesses have to be set manually.
+///
+/// # Examples
+///
+/// Creating a `Client` is as spimple as:
+/**
+
+    use std::net::Ipv4Addr;
+
+    // This is the address of your host in your local network
+    let pcp_client = Ipv4Addr::new(192, 168, 1, 101);
+
+    // Most of the times it's the default gateway address
+    let pcp_server = Ipv4Addr::new(192, 168, 1, 1);
+
+    // Start the PCP client service
+    let handle = Client::<Ipv4Addr>::start(pcp_client, pcp_server).unwrap();
+
+*/
 pub struct Client<Ip: IpAddress> {
     /// Address of the client
     addr: Ip,
@@ -46,7 +147,11 @@ impl<Ip: IpAddress> Client<Ip> {
     /// Creates a new `Client` and starts it on a different thread; the return value is the `Sender`
     /// of `Event`s connected to the client's `Receiver` from which the client will listen for
     /// incoming events
-    fn new(socket: UdpSocket, addr: Ip, to_handle: mpsc::Sender<Error>) -> mpsc::Sender<Event<Ip>> {
+    fn open(
+        socket: UdpSocket,
+        addr: Ip,
+        to_handle: mpsc::Sender<Error>,
+    ) -> mpsc::Sender<Event<Ip>> {
         let (tx, event_receiver) = mpsc::channel();
         let event_source = tx.clone();
         std::thread::spawn(move || {
@@ -78,6 +183,8 @@ impl<Ip: IpAddress> Client<Ip> {
             })
     }
 
+    // TODO: is it correct to use the nonce to distinguish between mappings?
+
     // fn generate_nonce(&mut self, id: usize) -> [u8; 12] {
     // 	let mut buf = [0; 12];
     // 	#[cfg(target_pointer_width = "32")]
@@ -95,7 +202,6 @@ impl<Ip: IpAddress> Client<Ip> {
 
     /// Generate the noce by using the id of the mapping as the first byte (making it unique for
     /// each mapping)
-    // TODO: 8 bit bastano? forse melio usare quella sopra
     fn generate_nonce(&mut self, id: u8) -> [u8; 12] {
         let mut buf = [0; 12];
         buf[0] = id;
@@ -208,17 +314,18 @@ impl<Ip: IpAddress> Client<Ip> {
 
     /// Computes the duration needed to wait for the retrasmission of a keepalive request
     fn jitter_lifetime(rng: &mut ThreadRng, lifetime: u32, times: usize) -> Option<Duration> {
-        let ftime = lifetime as f32 * if times == 0 {
-            // (1/2)~(5/8) --> 1/2 + 0~1 * 1/8
-            0.5 + rng.gen::<f32>() * 0.125
-        } else {
-            // Not sure of this formula, it's not explicitly written in the specification
-            // n = number of attempts (subsequent to the first)
-            // (2^(n+1)-1)/2^(n+1) + 0~1 * 1/(2^(n+3))
-            let denom = 4 << times;
-            let base = (denom - 1) as f32 / denom as f32;
-            base + rng.gen::<f32>() / (8 << times) as f32
-        };
+        let ftime = lifetime as f32
+            * if times == 0 {
+                // (1/2)~(5/8) --> 1/2 + 0~1 * 1/8
+                0.5 + rng.gen::<f32>() * 0.125
+            } else {
+                // Not sure of this formula, it's not explicitly written in the specification
+                // n = number of attempts (subsequent to the first)
+                // (2^(n+1)-1)/2^(n+1) + 0~1 * 1/(2^(n+3))
+                let denom = 4 << times;
+                let base = (denom - 1) as f32 / denom as f32;
+                base + rng.gen::<f32>() / (8 << times) as f32
+            };
         if ftime < 4.0 {
             None
         } else {
@@ -270,7 +377,7 @@ impl<Ip: IpAddress> Client<Ip> {
                     map.filters.into_iter().for_each(|f| {
                         options.push(PacketOption::filter(
                             // TODO: sposta questo all'interno
-                            f.prefix + 128 - Ip::MAX_PREFIX_LENGTH,
+                            f.prefix + 128 - Ip::LENGTH,
                             f.remote_port,
                             f.remote_addr.into(),
                         ))
@@ -278,8 +385,9 @@ impl<Ip: IpAddress> Client<Ip> {
                     if map.prefer_failure {
                         options.push(PacketOption::prefer_failure())
                     };
-                    map.third_party
-                        .map(|addr| options.push(PacketOption::third_party(addr.into())));
+                    if let Some(addr) = map.third_party {
+                        options.push(PacketOption::third_party(addr.into()))
+                    }
 
                     // Construct the request
                     let request = RequestPacket::map(
@@ -317,7 +425,7 @@ impl<Ip: IpAddress> Client<Ip> {
                         kind,
                     );
 
-                    // Insert the mapping in the vector
+                    // Insert the mapping in the list
                     match opt_idx {
                         Some(i) => self.mappings[i] = mapping,
                         None => self.mappings.push(mapping),
@@ -552,7 +660,7 @@ impl<Ip: IpAddress> Client<Ip> {
                                         }
                                         RequestType::KeepAlive | RequestType::Repeat(_) => {
                                             Self::jitter_lifetime(&mut self.rng, lifetime, 0)
-                                                .unwrap_or(Duration::from_secs(0))
+                                                .unwrap_or_default()
                                         }
                                     };
 
@@ -621,7 +729,7 @@ impl<Ip: IpAddress> Client<Ip> {
                                         }
                                         RequestType::KeepAlive | RequestType::Repeat(_) => {
                                             Self::jitter_lifetime(&mut self.rng, lifetime, 0)
-                                                .unwrap_or(Duration::from_secs(0))
+                                                .unwrap_or_default()
                                         }
                                     };
 
@@ -669,6 +777,8 @@ impl<Ip: IpAddress> Client<Ip> {
     }
 }
 
+// TODO: check if multicast packets are received
+
 impl Client<Ipv4Addr> {
     /// Starts the PCP client and returns it's `Handle` which is used to request mappings.
     pub fn start(client: Ipv4Addr, server: Ipv4Addr) -> io::Result<Handle<Ipv4Addr>> {
@@ -680,7 +790,7 @@ impl Client<Ipv4Addr> {
         let server_socket = client_socket.try_clone()?;
 
         let (to_handle, from_client) = mpsc::channel();
-        let tx = Client::new(client_socket, client, to_handle);
+        let tx = Client::open(client_socket, client, to_handle);
 
         let announce_socket = UdpSocket::bind(SocketAddrV4::new(client, 5350))?;
         announce_socket.join_multicast_v4(&Ipv4Addr::new(224, 0, 0, 1), &client)?;
@@ -704,7 +814,7 @@ impl Client<Ipv6Addr> {
         let server_socket = client_socket.try_clone()?;
 
         let (to_handle, from_client) = mpsc::channel();
-        let tx = Client::new(client_socket, client, to_handle);
+        let tx = Client::open(client_socket, client, to_handle);
 
         let announce_socket = UdpSocket::bind(SocketAddrV6::new(client, 5350, 0, 0))?;
         announce_socket.join_multicast_v6(&Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1), 0)?;

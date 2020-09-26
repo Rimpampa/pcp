@@ -2,10 +2,8 @@ use super::handle::{Error, RequestType};
 use super::map::{InboundMap, OutboundMap};
 use super::state::{Alert, AtomicState};
 use super::IpAddress;
-use crate::types::{
-    MapResponsePayload, OpCode, PacketOption, Parsable, PeerResponsePayload, ResponsePacketSlice,
-    ResponsePayload, ResultCode,
-};
+use crate::types::payloads::{MapResponsePayload, PeerResponsePayload, ResponsePayload};
+use crate::types::{OpCode, PacketOption, Parsable, ResponsePacketSlice, ResultCode};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -138,7 +136,7 @@ impl Delay {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             thread::sleep(time);
-            if let Err(_) = rx.try_recv() {
+            if rx.try_recv().is_err() {
                 channel.send(Event::Delay(id, time)).ok();
             }
         });

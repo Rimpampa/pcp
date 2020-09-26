@@ -28,7 +28,8 @@ pub struct InboundMap<Ip: IpAddress> {
 }
 
 impl<Ip: IpAddress> InboundMap<Ip> {
-    /// Creates a new `InboundMap`
+    /// Creates a new inbound mapping with the specified lifetime and that maps
+    /// the specified port
     pub fn new(internal_port: u16, lifetime: u32) -> Self {
         Self {
             lifetime,
@@ -41,6 +42,7 @@ impl<Ip: IpAddress> InboundMap<Ip> {
             prefer_failure: false,
         }
     }
+
     /// Specifies a specific protocol to be used
     pub fn protocol(mut self, number: ProtocolNumber) -> Self {
         match self.protocol {
@@ -49,6 +51,7 @@ impl<Ip: IpAddress> InboundMap<Ip> {
         }
         self
     }
+
     /// Suggests an external address to be used
     pub fn external_address(mut self, suggest: Ip) -> Self {
         match self.external_addr {
@@ -57,6 +60,7 @@ impl<Ip: IpAddress> InboundMap<Ip> {
         }
         self
     }
+
     /// Suggests an external port to be used
     pub fn external_port(mut self, suggest: u16) -> Self {
         match self.external_port {
@@ -65,6 +69,7 @@ impl<Ip: IpAddress> InboundMap<Ip> {
         }
         self
     }
+
     /// Specifies that the mapping is done on behalf of another host.
     ///
     /// PCP servers may not implement this feature
@@ -75,16 +80,18 @@ impl<Ip: IpAddress> InboundMap<Ip> {
         }
         self
     }
+
     /// Indicates that the PCP server should not create an alternative mapping if the suggested
     /// external port and address cannot be mapped
     pub fn prefer_failure(mut self, prefer: bool) -> Self {
         self.prefer_failure = prefer;
         self
     }
+
     /// Specifies a filter for incoming packets
     pub fn filter(mut self, remote_port: u16, remote_addr: Ip, prefix: u8) -> Self {
-        if prefix > Ip::MAX_PREFIX_LENGTH {
-            panic!("The specified prefix is greater than 32")
+        if prefix > Ip::LENGTH {
+            panic!("The specified prefix is greater than {}", prefix);
         }
         self.filters.push(Filter {
             remote_port,
@@ -122,6 +129,7 @@ impl<Ip: IpAddress> OutboundMap<Ip> {
             external_addr: None,
         }
     }
+
     /// Specifies a specific protocol to be used
     pub fn protocol(mut self, number: ProtocolNumber) -> Self {
         match self.protocol {
@@ -130,6 +138,7 @@ impl<Ip: IpAddress> OutboundMap<Ip> {
         }
         self
     }
+
     /// Suggests an external address to be used
     pub fn external_address(mut self, suggest: Ip) -> Self {
         match self.external_addr {
@@ -138,6 +147,7 @@ impl<Ip: IpAddress> OutboundMap<Ip> {
         }
         self
     }
+
     /// Suggests an external port to be used
     pub fn external_port(mut self, suggest: u16) -> Self {
         match self.external_port {
@@ -146,6 +156,7 @@ impl<Ip: IpAddress> OutboundMap<Ip> {
         }
         self
     }
+
     /// Specifies that the mapping is done on behalf of another host.
     ///
     /// PCP servers may not implement this feature

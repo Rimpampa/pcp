@@ -27,15 +27,17 @@ pub struct ResponsePacketSlice<'a> {
 
 impl<'a> ResponsePacketSlice<'a> {
     /// Returns a reference to the options in the packets
-    pub fn options(&self) -> &Vec<PacketOptionSlice<'a>> {
+    pub const fn options(&self) -> &Vec<PacketOptionSlice<'a>> {
         &self.options
     }
+
     /// Returns a reference to the payload data of the packet
-    pub fn payload(&self) -> &ResponsePayloadSlice<'a> {
+    pub const fn payload(&self) -> &ResponsePayloadSlice<'a> {
         &self.payload
     }
+
     /// Returns a reference to the header data of the packet
-    pub fn header(&self) -> &ResponseHeaderSlice<'a> {
+    pub const fn header(&self) -> &ResponseHeaderSlice<'a> {
         &self.header
     }
 }
