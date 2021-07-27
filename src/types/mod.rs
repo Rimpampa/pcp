@@ -28,78 +28,20 @@
 //! and returns a `Result` that can lead to a `ParsingError` if the data is not
 //! valid
 
-// TODO: make the slice types composed of more slices single sliced, and add unchecked variants of try_from
-
-// TODO: (maybe) use unsafe code to remove unnecessary checks
-
-pub mod headers;
+mod base;
 mod op_code;
-mod option;
 mod option_code;
+mod packet;
 mod parsing_error;
-pub mod payloads;
 mod protocols;
-mod request;
-mod response;
 mod result_code;
 
+use std::ops::Index;
+
+pub use base::*;
 pub use op_code::OpCode;
-pub use option::{PacketOption, PacketOptionSlice};
 pub use option_code::OptionCode;
+pub use packet::*;
 pub use parsing_error::ParsingError;
 pub use protocols::ProtocolNumber;
-pub use request::RequestPacket;
-pub use response::{ResponsePacket, ResponsePacketSlice};
 pub use result_code::ResultCode;
-
-use headers::*;
-use payloads::*;
-use std::convert::TryFrom;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-
-/// This trait is used to parse non-copy version of PCP data formats into owned types
-pub trait Parsable {
-    type Parsed;
-    /// Parses the fields of the data
-    fn parse(&self) -> Self::Parsed;
-}
-
-impl<P, S> Parsable for Vec<S>
-where
-    S: Parsable<Parsed = P>,
-{
-    type Parsed = Vec<P>;
-
-    fn parse(&self) -> Self::Parsed {
-        self.iter().map(S::parse).collect()
-    }
-}
-
-/// Simple trait to add methods to the Ipv6Addr type
-pub trait Ipv6Address {
-    /// Tells if an IPv6 address is an IPv4-mapped IPv6 address
-    fn is_mapped(&self) -> bool;
-    /// Returns the IPv4 address contained in an IPv4-mapped IPv6 address,
-    /// or the IPv6 address if it's not mapped
-    fn unmap(self) -> IpAddr;
-}
-
-impl Ipv6Address for Ipv6Addr {
-    fn is_mapped(&self) -> bool {
-        match self.octets() {
-            // IPv4-mapped IPv6 addresses are of the form ::ffff:a.b.c.d
-            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, _, _, _, _] => true,
-            _ => false,
-        }
-    }
-
-    fn unmap(self) -> IpAddr {
-        match self.octets() {
-            // IPv4-mapped IPv6 addresses have to form ::ffff:a.b.c.d
-            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, a, b, c, d] => {
-                IpAddr::V4(Ipv4Addr::new(a, b, c, d))
-            }
-            _ => IpAddr::V6(self),
-        }
-    }
-}
