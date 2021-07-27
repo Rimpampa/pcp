@@ -1,5 +1,7 @@
 use std::convert::TryFrom;
 
+use super::ParsingError;
+
 /// All the IP protocol numbers defined by the IANA
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum ProtocolNumber {
@@ -298,9 +300,10 @@ pub enum ProtocolNumber {
 }
 
 impl TryFrom<u8> for ProtocolNumber {
-    type Error = ();
+    type Error = ParsingError;
 
     fn try_from(val: u8) -> Result<ProtocolNumber, Self::Error> {
+        use ParsingError::*;
         use ProtocolNumber::*;
         match val {
             0 => Ok(Hopopt),
@@ -449,7 +452,7 @@ impl TryFrom<u8> for ProtocolNumber {
             143 => Ok(Ethernet),
             253 => Ok(Test1),
             254 => Ok(Test2),
-            _ => Err(()),
+            n => Err(NotAProtocolNumber(n)),
         }
     }
 }
