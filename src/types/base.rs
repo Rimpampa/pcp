@@ -164,7 +164,8 @@ impl TryFrom<&[u8]> for RequestHeader {
     type Error = ParsingError;
 
     fn try_from(s: &[u8]) -> Result<Self, Self::Error> {
-        let s = try_get::<{ Self::SIZE }>(s).ok_or(ParsingError::InvalidSliceLength(s.len()))?;
+        let s = try_get::<{ Self::SIZE }>(s)
+            .ok_or_else(|| ParsingError::InvalidSliceLength(s.len()))?;
         if s[0] != 2 {
             return Err(ParsingError::VersionNotSupported(s[0]));
         }
@@ -242,11 +243,12 @@ impl TryFrom<&[u8]> for ResponseHeader {
     type Error = ParsingError;
 
     fn try_from(s: &[u8]) -> Result<Self, Self::Error> {
-        let s = try_get::<{ Self::SIZE }>(s).ok_or(ParsingError::InvalidSliceLength(s.len()))?;
+        let s = try_get::<{ Self::SIZE }>(s)
+            .ok_or_else(|| ParsingError::InvalidSliceLength(s.len()))?;
         if s[0] != 2 {
             return Err(ParsingError::VersionNotSupported(s[0]));
         }
-        if s[1] & 0b10000000 != 1 {
+        if s[1] & 0b10000000 > 0 {
             return Err(ParsingError::NotAResponse);
         }
         Ok(Self {
@@ -319,7 +321,8 @@ impl TryFrom<&[u8]> for OptionHeader {
     type Error = ParsingError;
 
     fn try_from(s: &[u8]) -> Result<Self, Self::Error> {
-        let s = try_get::<{ Self::SIZE }>(s).ok_or(ParsingError::InvalidSliceLength(s.len()))?;
+        let s = try_get::<{ Self::SIZE }>(s)
+            .ok_or_else(|| ParsingError::InvalidSliceLength(s.len()))?;
         let code = s[0].try_into()?;
         let length = get(&s[2..4]);
         let check = match code {
@@ -393,7 +396,8 @@ impl TryFrom<&[u8]> for MapResponsePayload {
     type Error = ParsingError;
 
     fn try_from(s: &[u8]) -> Result<Self, Self::Error> {
-        let s = try_get::<{ Self::SIZE }>(s).ok_or(ParsingError::InvalidSliceLength(s.len()))?;
+        let s = try_get::<{ Self::SIZE }>(s)
+            .ok_or_else(|| ParsingError::InvalidSliceLength(s.len()))?;
         Ok(Self {
             nonce: get(&s[..12]),
             protocol: s[13].try_into()?,
@@ -483,7 +487,8 @@ impl TryFrom<&[u8]> for MapRequestPayload {
     type Error = ParsingError;
 
     fn try_from(s: &[u8]) -> Result<Self, Self::Error> {
-        let s = try_get::<{ Self::SIZE }>(s).ok_or(ParsingError::InvalidSliceLength(s.len()))?;
+        let s = try_get::<{ Self::SIZE }>(s)
+            .ok_or_else(|| ParsingError::InvalidSliceLength(s.len()))?;
         Ok(Self {
             nonce: get(&s[0..12]),
             protocol: s[12].try_into()?,
@@ -543,8 +548,8 @@ impl PeerResponsePayload {
         Self::SIZE
     }
 
-    fn copy_to(&self, s: &[u8]) {
-        let s = try_get::<{ Self::SIZE }>(s).unwrap();
+    fn copy_to(&self, s: &mut [u8]) {
+        let s = try_get_mut::<{ Self::SIZE }>(s).unwrap();
         s[12] = self.protocol as u8;
         self.nonce.set(&mut s[0..12]);
         self.internal_port.set(&mut s[16..18]);
@@ -559,7 +564,8 @@ impl TryFrom<&[u8]> for PeerResponsePayload {
     type Error = ParsingError;
 
     fn try_from(s: &[u8]) -> Result<Self, Self::Error> {
-        let s = try_get::<{ Self::SIZE }>(s).ok_or(ParsingError::InvalidSliceLength(s.len()))?;
+        let s = try_get::<{ Self::SIZE }>(s)
+            .ok_or_else(|| ParsingError::InvalidSliceLength(s.len()))?;
         Ok(Self {
             nonce: get(&s[0..12]),
             protocol: s[12].try_into()?,
@@ -660,7 +666,8 @@ impl TryFrom<&[u8]> for PeerRequestPayload {
     type Error = ParsingError;
 
     fn try_from(s: &[u8]) -> Result<Self, Self::Error> {
-        let s = try_get::<{ Self::SIZE }>(s).ok_or(ParsingError::InvalidSliceLength(s.len()))?;
+        let s = try_get::<{ Self::SIZE }>(s)
+            .ok_or_else(|| ParsingError::InvalidSliceLength(s.len()))?;
         Ok(Self {
             nonce: get(&s[0..12]),
             protocol: s[12].try_into()?,
@@ -722,7 +729,8 @@ impl TryFrom<&[u8]> for FilterOptionPayload {
     type Error = ParsingError;
 
     fn try_from(s: &[u8]) -> Result<Self, Self::Error> {
-        let s = try_get::<{ Self::SIZE }>(s).ok_or(ParsingError::InvalidSliceLength(s.len()))?;
+        let s = try_get::<{ Self::SIZE }>(s)
+            .ok_or_else(|| ParsingError::InvalidSliceLength(s.len()))?;
         if let [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, _, _, _, _] = s[4..20] {
             if s[1] < 96 {
                 return Err(ParsingError::InvalidPrefix(s[1]));
@@ -782,7 +790,8 @@ impl TryFrom<&[u8]> for ThirdPartyOptionPayload {
     type Error = ParsingError;
 
     fn try_from(s: &[u8]) -> Result<Self, Self::Error> {
-        let s = try_get::<{ Self::SIZE }>(s).ok_or(ParsingError::InvalidSliceLength(s.len()))?;
+        let s = try_get::<{ Self::SIZE }>(s)
+            .ok_or_else(|| ParsingError::InvalidSliceLength(s.len()))?;
         Ok(Self { address: get(s) })
     }
 }
