@@ -97,7 +97,7 @@ impl TryFrom<&[u8]> for PacketOption {
 
 /// TODO
 #[derive(PartialEq, Debug)]
-enum RequestPayload {
+pub enum RequestPayload {
     Map(MapRequestPayload),
     Peer(PeerRequestPayload),
     Announce,
@@ -152,7 +152,7 @@ impl RequestPacket {
         s = &mut s[self.payload.size()..];
 
         for option in &self.options {
-            match option.payload {
+            match &option.payload {
                 OptionPayload::PreferFailure => (),
                 OptionPayload::Filter(p) => p.copy_to(s),
                 OptionPayload::ThirdParty(p) => p.copy_to(s),
@@ -187,12 +187,12 @@ impl RequestPacket {
         let payload =
             MapRequestPayload::new(nonce, protocol, internal_port, external_port, external_addr);
 
-        Ok(Self {
+        Self {
             header: RequestHeader::map(version, lifetime, internal_addr),
             payload: RequestPayload::Map(payload),
             options,
         }
-        .check_size()?)
+        .check_size()
     }
 
     /// Constructs a PCP peer request
@@ -229,12 +229,12 @@ impl RequestPacket {
             remote_port,
             remote_addr,
         );
-        Ok(Self {
+        Self {
             header: RequestHeader::peer(version, lifetime, internal_addr),
             payload: RequestPayload::Peer(payload),
             options,
         }
-        .check_size()?)
+        .check_size()
     }
 
     /// Constructs a PCP announce request
@@ -251,7 +251,7 @@ impl RequestPacket {
 
 /// TODO
 #[derive(PartialEq, Debug)]
-enum ResponsePayload {
+pub enum ResponsePayload {
     Map(MapResponsePayload),
     Peer(PeerResponsePayload),
     Announce,

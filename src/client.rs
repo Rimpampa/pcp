@@ -77,15 +77,16 @@ use super::handle::{Error, Handle, RequestType};
 use super::state::{Alert, MappingState, State};
 use super::IpAddress;
 use crate::types::{
-    payloads::RequestPayload, OpCode, PacketOption, RequestPacket, ResponsePacketSlice, ResultCode,
+    MapRequestPayload, OpCode, PacketOption, RequestPacket, RequestPayload, ResponsePacket,
+    ResultCode,
 };
 use rand::rngs::ThreadRng;
 use rand::{Rng, RngCore};
 use std::convert::TryFrom;
-use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, UdpSocket};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+use std::{io, slice};
 
 // TODO: allow modifying those values
 
@@ -95,6 +96,13 @@ const IRT: f32 = 3.0;
 const MRT: f32 = 1024.0;
 /// Maximum Retrasmission Count (0 = infinite)
 const MRC: usize = 0;
+
+fn to_ipv6(ip: IpAddr) -> Ipv6Addr {
+    match ip {
+        IpAddr::V4(v4) => v4.to_ipv6_mapped(),
+        IpAddr::V6(v6) => v6,
+    }
+}
 
 /// A daemon thread that implements the PCP protocol (client-side).
 ///
@@ -247,13 +255,13 @@ impl<Ip: IpAddress> Client<Ip> {
                 if let Some(ref buffer) = map.buffer {
                     sock.send(buffer)?;
                 } else {
-                    let buffer = map.request.bytes();
+                    let mut buffer = vec![0u8; map.request.size()];
+                    map.request.copy_to(&mut buffer);
                     sock.send(&buffer)?;
                     map.buffer = Some(buffer);
                 }
                 Ok(())
-            })
-            .map_err(Error::from)?;
+            })?;
 
         let rng = &mut self.rng;
         let event_source = &self.event_source;
@@ -267,26 +275,27 @@ impl<Ip: IpAddress> Client<Ip> {
 
     fn update_mapping(
         rng: &mut ThreadRng,
-        mapping: &mut MappingState,
+        map: &mut MappingState,
         id: usize,
         times: usize,
         sock: &UdpSocket,
         tx: mpsc::Sender<Event<Ip>>,
     ) -> Result<(), Error> {
-        match Self::jitter_lifetime(rng, mapping.request.header.lifetime, times) {
+        match Self::jitter_lifetime(rng, map.request.header.lifetime, times) {
             Some(delay) => {
                 // Resend the request
-                if let Some(ref buf) = mapping.buffer {
-                    sock.send(buf).map_err(Error::from)?;
+                if let Some(ref buf) = map.buffer {
+                    sock.send(buf)?;
                 } else {
-                    let buf = mapping.request.bytes();
-                    sock.send(&buf).map_err(Error::from)?;
-                    mapping.buffer = Some(buf);
+                    let mut buffer = vec![0u8; map.request.size()];
+                    map.request.copy_to(&mut buffer);
+                    sock.send(&buffer)?;
+                    map.buffer = Some(buffer);
                 }
-                mapping.set_state(State::Updating(times, mapping.request.header.lifetime));
-                mapping.delay = Delay::by(delay, id, tx);
+                map.set_state(State::Updating(times, map.request.header.lifetime));
+                map.delay = Delay::by(delay, id, tx);
             }
-            None => mapping.set_state(State::Expired),
+            None => map.set_state(State::Expired),
         }
         Ok(())
     }
@@ -354,7 +363,7 @@ impl<Ip: IpAddress> Client<Ip> {
 
     fn run(&mut self) -> Result<(), Error> {
         loop {
-            match self.event_receiver.recv().map_err(Error::from)? {
+            match self.event_receiver.recv()? {
                 // The handler request an inbound mapping
                 Event::InboundMap(map, kind, state, handle_id, handle_alert) => {
                     state.set(State::Starting(0));
@@ -379,32 +388,33 @@ impl<Ip: IpAddress> Client<Ip> {
                             // TODO: sposta questo all'interno
                             f.prefix + 128 - Ip::LENGTH,
                             f.remote_port,
-                            f.remote_addr.into(),
+                            to_ipv6(f.remote_addr.into()),
                         ))
                     });
                     if map.prefer_failure {
                         options.push(PacketOption::prefer_failure())
                     };
                     if let Some(addr) = map.third_party {
-                        options.push(PacketOption::third_party(addr.into()))
+                        options.push(PacketOption::third_party(to_ipv6(addr.into())))
                     }
 
                     // Construct the request
                     let request = RequestPacket::map(
                         2,
                         map.lifetime,
-                        self.addr.into(),
+                        to_ipv6(self.addr.into()),
                         self.generate_nonce(idx as u8),
                         map.protocol,
                         map.internal_port,
                         map.external_port.unwrap_or(0),
-                        map.external_addr.unwrap_or(Ip::UNSPECIFIED).into(),
+                        to_ipv6(map.external_addr.unwrap_or(Ip::UNSPECIFIED).into()),
                         options,
                     )
                     .unwrap();
 
                     // Send the packet
-                    let buf = request.bytes();
+                    let mut buf = vec![0u8; request.size()];
+                    request.copy_to(&mut buf);
                     self.socket.send(&buf).map_err(|err| {
                         handle_id.send(None).ok();
                         Error::from(err)
@@ -441,7 +451,7 @@ impl<Ip: IpAddress> Client<Ip> {
 
                     // Construct a vector with all the options
                     let mut options = match map.third_party {
-                        Some(addr) => vec![PacketOption::third_party(addr.into())],
+                        Some(addr) => vec![PacketOption::third_party(to_ipv6(addr.into()))],
                         None => Vec::new(),
                     };
 
@@ -449,20 +459,21 @@ impl<Ip: IpAddress> Client<Ip> {
                     let request = RequestPacket::peer(
                         2,
                         map.lifetime,
-                        self.addr.into(),
+                        to_ipv6(self.addr.into()),
                         self.generate_nonce(idx as u8),
                         map.protocol,
                         map.internal_port,
                         map.external_port.unwrap_or(0),
-                        map.external_addr.unwrap_or(Ip::UNSPECIFIED).into(),
+                        to_ipv6(map.external_addr.unwrap_or(Ip::UNSPECIFIED).into()),
                         map.remote_port,
-                        map.remote_addr.into(),
+                        to_ipv6(map.remote_addr.into()),
                         options,
                     )
                     .unwrap();
 
                     // Send the packet
-                    let buf = request.bytes();
+                    let mut buf = vec![0u8; request.size()];
+                    request.copy_to(&mut buf);
                     self.socket.send(&buf).map_err(|err| {
                         handle_id.send(None).ok();
                         Error::from(err)
@@ -496,9 +507,9 @@ impl<Ip: IpAddress> Client<Ip> {
                     mapping.request.header.lifetime = 0;
                     mapping.buffer = None;
                     mapping.delay.ignore();
-                    self.socket
-                        .send(&mapping.request.bytes())
-                        .map_err(Error::from)?;
+                    let mut buffer = vec![0u8; mapping.request.size()];
+                    mapping.request.copy_to(&mut buffer);
+                    self.socket.send(&buffer)?;
 
                     mapping.set_state(State::Dropped);
                 }
@@ -511,9 +522,9 @@ impl<Ip: IpAddress> Client<Ip> {
                     mapping.buffer = None;
                     mapping.delay.ignore();
                     // Send the packet with the 0 lifetime
-                    self.socket
-                        .send(&mapping.request.bytes())
-                        .map_err(Error::from)?;
+                    let mut buffer = vec![0u8; mapping.request.size()];
+                    mapping.request.copy_to(&mut buffer);
+                    self.socket.send(&buffer)?;
 
                     mapping.set_state(State::Revoked);
                 }
@@ -524,9 +535,10 @@ impl<Ip: IpAddress> Client<Ip> {
                     mapping.request.header.lifetime = lifetime;
                     mapping.delay.ignore();
                     // Update the buffer and send the packet
-                    let buf = mapping.request.bytes();
-                    self.socket.send(&buf).map_err(Error::from)?;
-                    mapping.buffer = Some(buf);
+                    let mut buffer = vec![0u8; mapping.request.size()];
+                    mapping.request.copy_to(&mut buffer);
+                    self.socket.send(&buffer)?;
+                    mapping.buffer = Some(buffer);
 
                     mapping.set_state(State::Starting(0));
                     mapping.delay = Delay::by(
@@ -546,10 +558,11 @@ impl<Ip: IpAddress> Client<Ip> {
                             mapping.set_state(State::Starting(n + 1));
                             // Resend the packet
                             if let Some(ref buffer) = mapping.buffer {
-                                self.socket.send(buffer).map_err(Error::from)?;
+                                self.socket.send(buffer)?;
                             } else {
-                                let buffer = mapping.request.bytes();
-                                self.socket.send(&buffer).map_err(Error::from)?;
+                                let mut buffer = vec![0u8; mapping.request.size()];
+                                mapping.request.copy_to(&mut buffer);
+                                self.socket.send(&buffer)?;
                                 mapping.buffer = Some(buffer);
                             }
                             // Restart the timer
@@ -649,7 +662,7 @@ impl<Ip: IpAddress> Client<Ip> {
                                     mapping.set_state(State::Running);
 
                                     mapping.alert(Alert::Assigned(
-                                        payload.external_address,
+                                        IpAddr::V6(payload.external_addr),
                                         payload.external_port,
                                         lifetime,
                                     ));
@@ -767,8 +780,8 @@ impl<Ip: IpAddress> Client<Ip> {
         std::thread::spawn(move || loop {
             if let Ok(bytes) = socket.recv(&mut buf) {
                 if bytes < 1011 {
-                    match ResponsePacketSlice::try_from(&buf[..bytes]) {
-                        Ok(packet) => to_client.send(Event::<Ip>::packet_event(&packet)).ok(),
+                    match ResponsePacket::try_from(&buf[..bytes]) {
+                        Ok(packet) => to_client.send(Event::<Ip>::packet_event(packet)).ok(),
                         Err(error) => to_client.send(Event::ListenError(error.into())).ok(),
                     };
                 }
