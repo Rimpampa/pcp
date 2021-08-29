@@ -75,7 +75,6 @@
 use super::event::{Delay, Event};
 use super::handle::{Error, Handle, RequestType};
 use super::state::{Alert, MappingState, State};
-use super::IpAddress;
 use crate::types::{
     MapRequestPayload, OpCode, PacketOption, RequestPacket, RequestPayload, ResponsePacket,
     ResultCode,
@@ -96,13 +95,6 @@ const IRT: f32 = 3.0;
 const MRT: f32 = 1024.0;
 /// Maximum Retrasmission Count (0 = infinite)
 const MRC: usize = 0;
-
-fn to_ipv6(ip: IpAddr) -> Ipv6Addr {
-    match ip {
-        IpAddr::V4(v4) => v4.to_ipv6_mapped(),
-        IpAddr::V6(v6) => v6,
-    }
-}
 
 /// A daemon thread that implements the PCP protocol (client-side).
 ///
@@ -132,15 +124,15 @@ fn to_ipv6(ip: IpAddr) -> Ipv6Addr {
     let handle = Client::<Ipv4Addr>::start(pcp_client, pcp_server).unwrap();
 
 */
-pub struct Client<Ip: IpAddress> {
-    /// Address of the client
-    addr: Ip,
+pub struct Client {
+    /// IP Address (or addresses) of the client
+    addr: IpAddr,
     /// Socket connected to the PCP server
     socket: UdpSocket,
     /// Receiver where the events come from
-    event_receiver: mpsc::Receiver<Event<Ip>>,
+    event_receiver: mpsc::Receiver<Event>,
     /// Event source used for initializing `Delay`s
-    event_source: mpsc::Sender<Event<Ip>>,
+    event_source: mpsc::Sender<Event>,
     /// Sender connected to this client's handler, used for notifying eventual errors
     to_handle: mpsc::Sender<Error>,
     /// Vector containing the data of each mapping
@@ -151,15 +143,15 @@ pub struct Client<Ip: IpAddress> {
     epoch: Option<(u32, Instant)>,
 }
 
-impl<Ip: IpAddress> Client<Ip> {
+impl Client {
     /// Creates a new `Client` and starts it on a different thread; the return value is the `Sender`
     /// of `Event`s connected to the client's `Receiver` from which the client will listen for
     /// incoming events
     fn open(
         socket: UdpSocket,
-        addr: Ip,
+        addr: IpAddr,
         to_handle: mpsc::Sender<Error>,
-    ) -> mpsc::Sender<Event<Ip>> {
+    ) -> mpsc::Sender<Event> {
         let (tx, event_receiver) = mpsc::channel();
         let event_source = tx.clone();
         std::thread::spawn(move || {
@@ -279,7 +271,7 @@ impl<Ip: IpAddress> Client<Ip> {
         id: usize,
         times: usize,
         sock: &UdpSocket,
-        tx: mpsc::Sender<Event<Ip>>,
+        tx: mpsc::Sender<Event>,
     ) -> Result<(), Error> {
         match Self::jitter_lifetime(rng, map.request.header.lifetime, times) {
             Some(delay) => {
@@ -386,28 +378,31 @@ impl<Ip: IpAddress> Client<Ip> {
                     map.filters.into_iter().for_each(|f| {
                         options.push(PacketOption::filter(
                             // TODO: sposta questo all'interno
-                            f.prefix + 128 - Ip::LENGTH,
+                            f.prefix,
                             f.remote_port,
-                            to_ipv6(f.remote_addr.into()),
+                            f.remote_addr,
                         ))
                     });
                     if map.prefer_failure {
                         options.push(PacketOption::prefer_failure())
                     };
                     if let Some(addr) = map.third_party {
-                        options.push(PacketOption::third_party(to_ipv6(addr.into())))
+                        options.push(PacketOption::third_party(addr))
                     }
 
                     // Construct the request
                     let request = RequestPacket::map(
                         2,
                         map.lifetime,
-                        to_ipv6(self.addr.into()),
+                        match self.addr {
+                            IpAddr::V4(v4) => v4.to_ipv6_mapped(),
+                            IpAddr::V6(v6) => v6,
+                        },
                         self.generate_nonce(idx as u8),
                         map.protocol,
                         map.internal_port,
                         map.external_port.unwrap_or(0),
-                        to_ipv6(map.external_addr.unwrap_or(Ip::UNSPECIFIED).into()),
+                        map.external_addr.unwrap_or(Ipv6Addr::UNSPECIFIED),
                         options,
                     )
                     .unwrap();
@@ -451,7 +446,7 @@ impl<Ip: IpAddress> Client<Ip> {
 
                     // Construct a vector with all the options
                     let mut options = match map.third_party {
-                        Some(addr) => vec![PacketOption::third_party(to_ipv6(addr.into()))],
+                        Some(addr) => vec![PacketOption::third_party(addr)],
                         None => Vec::new(),
                     };
 
@@ -459,14 +454,17 @@ impl<Ip: IpAddress> Client<Ip> {
                     let request = RequestPacket::peer(
                         2,
                         map.lifetime,
-                        to_ipv6(self.addr.into()),
+                        match self.addr {
+                            IpAddr::V4(v4) => v4.to_ipv6_mapped(),
+                            IpAddr::V6(v6) => v6,
+                        },
                         self.generate_nonce(idx as u8),
                         map.protocol,
                         map.internal_port,
                         map.external_port.unwrap_or(0),
-                        to_ipv6(map.external_addr.unwrap_or(Ip::UNSPECIFIED).into()),
+                        map.external_addr.unwrap_or(Ipv6Addr::UNSPECIFIED),
                         map.remote_port,
-                        to_ipv6(map.remote_addr.into()),
+                        map.remote_addr,
                         options,
                     )
                     .unwrap();
@@ -775,13 +773,13 @@ impl<Ip: IpAddress> Client<Ip> {
         }
     }
 
-    fn listen(socket: UdpSocket, to_client: mpsc::Sender<Event<Ip>>) {
+    fn listen(socket: UdpSocket, to_client: mpsc::Sender<Event>) {
         let mut buf = [0; 1011];
         std::thread::spawn(move || loop {
             if let Ok(bytes) = socket.recv(&mut buf) {
                 if bytes < 1011 {
                     match ResponsePacket::try_from(&buf[..bytes]) {
-                        Ok(packet) => to_client.send(Event::<Ip>::packet_event(packet)).ok(),
+                        Ok(packet) => to_client.send(Event::packet_event(packet)).ok(),
                         Err(error) => to_client.send(Event::ListenError(error.into())).ok(),
                     };
                 }
@@ -790,52 +788,49 @@ impl<Ip: IpAddress> Client<Ip> {
     }
 }
 
-// TODO: check if multicast packets are received
+// // TODO: check if multicast packets are received
+// /// Starts the PCP client and returns it's `Handle` which is used to request mappings.
+// pub fn start(client: Ipv4Addr, server: Ipv4Addr) -> io::Result<Handle<Ipv4Addr>> {
+//     let server_sockaddr = SocketAddrV4::new(server, 5351);
 
-impl Client<Ipv4Addr> {
-    /// Starts the PCP client and returns it's `Handle` which is used to request mappings.
-    pub fn start(client: Ipv4Addr, server: Ipv4Addr) -> io::Result<Handle<Ipv4Addr>> {
-        let server_sockaddr = SocketAddrV4::new(server, 5351);
+//     let client_socket = UdpSocket::bind(SocketAddrV4::new(client, 0))?;
+//     client_socket.connect(server_sockaddr)?;
+//     // One part will be used only for sending, the other only for receiving
+//     let server_socket = client_socket.try_clone()?;
 
-        let client_socket = UdpSocket::bind(SocketAddrV4::new(client, 0))?;
-        client_socket.connect(server_sockaddr)?;
-        // One part will be used only for sending, the other only for receiving
-        let server_socket = client_socket.try_clone()?;
+//     let (to_handle, from_client) = mpsc::channel();
+//     let tx = Client::open(client_socket, client, to_handle);
 
-        let (to_handle, from_client) = mpsc::channel();
-        let tx = Client::open(client_socket, client, to_handle);
+//     let announce_socket = UdpSocket::bind(SocketAddrV4::new(client, 5350))?;
+//     announce_socket.join_multicast_v4(&Ipv4Addr::new(224, 0, 0, 1), &client)?;
+//     announce_socket.connect(server_sockaddr)?;
 
-        let announce_socket = UdpSocket::bind(SocketAddrV4::new(client, 5350))?;
-        announce_socket.join_multicast_v4(&Ipv4Addr::new(224, 0, 0, 1), &client)?;
-        announce_socket.connect(server_sockaddr)?;
+//     Self::listen(announce_socket, tx.clone());
+//     Self::listen(server_socket, tx.clone());
 
-        Self::listen(announce_socket, tx.clone());
-        Self::listen(server_socket, tx.clone());
+//     Ok(Handle::new(tx, from_client))
+// }
 
-        Ok(Handle::new(tx, from_client))
-    }
-}
+// impl Client<Ipv6Addr> {
+//     /// Starts the PCP client and returns it's `Handle` which is used to request mappings.
+//     pub fn start(client: Ipv6Addr, server: Ipv6Addr) -> io::Result<Handle<Ipv6Addr>> {
+//         let server_sockaddr = SocketAddrV6::new(server, 5351, 0, 0);
 
-impl Client<Ipv6Addr> {
-    /// Starts the PCP client and returns it's `Handle` which is used to request mappings.
-    pub fn start(client: Ipv6Addr, server: Ipv6Addr) -> io::Result<Handle<Ipv6Addr>> {
-        let server_sockaddr = SocketAddrV6::new(server, 5351, 0, 0);
+//         let client_socket = UdpSocket::bind(SocketAddrV6::new(client, 0, 0, 0))?;
+//         client_socket.connect(server_sockaddr)?;
+//         // One part will be used only for sending, the other only for receiving
+//         let server_socket = client_socket.try_clone()?;
 
-        let client_socket = UdpSocket::bind(SocketAddrV6::new(client, 0, 0, 0))?;
-        client_socket.connect(server_sockaddr)?;
-        // One part will be used only for sending, the other only for receiving
-        let server_socket = client_socket.try_clone()?;
+//         let (to_handle, from_client) = mpsc::channel();
+//         let tx = Client::open(client_socket, client, to_handle);
 
-        let (to_handle, from_client) = mpsc::channel();
-        let tx = Client::open(client_socket, client, to_handle);
+//         let announce_socket = UdpSocket::bind(SocketAddrV6::new(client, 5350, 0, 0))?;
+//         announce_socket.join_multicast_v6(&Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1), 0)?;
+//         announce_socket.connect(server_sockaddr)?;
 
-        let announce_socket = UdpSocket::bind(SocketAddrV6::new(client, 5350, 0, 0))?;
-        announce_socket.join_multicast_v6(&Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1), 0)?;
-        announce_socket.connect(server_sockaddr)?;
+//         Self::listen(announce_socket, tx.clone());
+//         Self::listen(server_socket, tx.clone());
 
-        Self::listen(announce_socket, tx.clone());
-        Self::listen(server_socket, tx.clone());
-
-        Ok(Handle::new(tx, from_client))
-    }
-}
+//         Ok(Handle::new(tx, from_client))
+//     }
+// }

@@ -1,33 +1,35 @@
+use std::net::Ipv6Addr;
+
 use super::IpAddress;
 use crate::types::ProtocolNumber;
 
 /// Trait used to generalize any type of mapping
-pub trait Map<Ip: IpAddress> {}
-impl<Ip: IpAddress> Map<Ip> for InboundMap<Ip> {}
-impl<Ip: IpAddress> Map<Ip> for OutboundMap<Ip> {}
+pub trait Map {}
+impl Map for InboundMap {}
+impl Map for OutboundMap {}
 
 #[derive(Clone, Debug)]
-pub struct Filter<Ip: IpAddress> {
+pub struct Filter {
     pub remote_port: u16,
-    pub remote_addr: Ip,
+    pub remote_addr: Ipv6Addr,
     pub prefix: u8,
 }
 
 #[derive(Clone, Debug)]
 /// An inbound map, is used to create an explicit dynamic mapping between an Internal Address +
 /// Port and an External Address + Port.
-pub struct InboundMap<Ip: IpAddress> {
+pub struct InboundMap {
     pub(crate) lifetime: u32,
     pub(crate) internal_port: u16,
     pub(crate) protocol: Option<ProtocolNumber>,
-    pub(crate) third_party: Option<Ip>,
+    pub(crate) third_party: Option<Ipv6Addr>,
     pub(crate) external_port: Option<u16>,
-    pub(crate) external_addr: Option<Ip>,
-    pub(crate) filters: Vec<Filter<Ip>>,
+    pub(crate) external_addr: Option<Ipv6Addr>,
+    pub(crate) filters: Vec<Filter>,
     pub(crate) prefer_failure: bool,
 }
 
-impl<Ip: IpAddress> InboundMap<Ip> {
+impl InboundMap {
     /// Creates a new inbound mapping with the specified lifetime and that maps
     /// the specified port
     pub fn new(internal_port: u16, lifetime: u32) -> Self {
@@ -53,7 +55,7 @@ impl<Ip: IpAddress> InboundMap<Ip> {
     }
 
     /// Suggests an external address to be used
-    pub fn external_address(mut self, suggest: Ip) -> Self {
+    pub fn external_address(mut self, suggest: Ipv6Addr) -> Self {
         match self.external_addr {
             Some(_) => panic!("The suggested external address was already specified"),
             None => self.external_addr = Some(suggest),
@@ -73,7 +75,7 @@ impl<Ip: IpAddress> InboundMap<Ip> {
     /// Specifies that the mapping is done on behalf of another host.
     ///
     /// PCP servers may not implement this feature
-    pub fn third_party(mut self, addr: Ip) -> Self {
+    pub fn third_party(mut self, addr: Ipv6Addr) -> Self {
         match self.third_party {
             Some(_) => panic!("The third party host address was already specified"),
             None => self.third_party = Some(addr),
@@ -89,8 +91,8 @@ impl<Ip: IpAddress> InboundMap<Ip> {
     }
 
     /// Specifies a filter for incoming packets
-    pub fn filter(mut self, remote_port: u16, remote_addr: Ip, prefix: u8) -> Self {
-        if prefix > Ip::LENGTH {
+    pub fn filter(mut self, remote_port: u16, remote_addr: Ipv6Addr, prefix: u8) -> Self {
+        if prefix > Ipv6Addr::LENGTH {
             panic!("The specified prefix is greater than {}", prefix);
         }
         self.filters.push(Filter {
@@ -104,20 +106,20 @@ impl<Ip: IpAddress> InboundMap<Ip> {
 
 /// An outbound map is used to create a new dynamic mapping to a remote peer's IP address and port
 #[derive(Clone, Debug)]
-pub struct OutboundMap<Ip: IpAddress> {
+pub struct OutboundMap {
     pub(crate) lifetime: u32,
     pub(crate) internal_port: u16,
-    pub(crate) remote_addr: Ip,
+    pub(crate) remote_addr: Ipv6Addr,
     pub(crate) remote_port: u16,
     pub(crate) protocol: Option<ProtocolNumber>,
-    pub(crate) third_party: Option<Ip>,
+    pub(crate) third_party: Option<Ipv6Addr>,
     pub(crate) external_port: Option<u16>,
-    pub(crate) external_addr: Option<Ip>,
+    pub(crate) external_addr: Option<Ipv6Addr>,
 }
 
-impl<Ip: IpAddress> OutboundMap<Ip> {
+impl OutboundMap {
     /// Creates a new `OutboundMap`
-    pub fn new(internal_port: u16, remote_addr: Ip, remote_port: u16, lifetime: u32) -> Self {
+    pub fn new(internal_port: u16, remote_addr: Ipv6Addr, remote_port: u16, lifetime: u32) -> Self {
         Self {
             lifetime,
             internal_port,
@@ -140,7 +142,7 @@ impl<Ip: IpAddress> OutboundMap<Ip> {
     }
 
     /// Suggests an external address to be used
-    pub fn external_address(mut self, suggest: Ip) -> Self {
+    pub fn external_address(mut self, suggest: Ipv6Addr) -> Self {
         match self.external_addr {
             Some(_) => panic!("The suggested external address was already specified"),
             None => self.external_addr = Some(suggest),
@@ -160,7 +162,7 @@ impl<Ip: IpAddress> OutboundMap<Ip> {
     /// Specifies that the mapping is done on behalf of another host.
     ///
     /// PCP servers may not implement this feature
-    pub fn third_party(mut self, addr: Ip) -> Self {
+    pub fn third_party(mut self, addr: Ipv6Addr) -> Self {
         match self.third_party {
             Some(_) => panic!("The third party host address was already specified"),
             None => self.third_party = Some(addr),

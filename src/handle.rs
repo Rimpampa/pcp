@@ -54,9 +54,9 @@ impl fmt::Display for Error {
 /// An handle to a PCP client service
 ///
 /// When a `Client` is started its `Handle` is returned and can be used to
-/// `request` mappings and to query its state.
 ///
 /// # Examples
+/// `request` mappings and to query its state.
 ///
 /// ### Submitting a request
 ///
@@ -89,16 +89,13 @@ impl fmt::Display for Error {
         println!("The client reported an error: {}", err);
     }
 */
-pub struct Handle<Ip: IpAddress> {
-    to_client: mpsc::Sender<Event<Ip>>,
+pub struct Handle {
+    to_client: mpsc::Sender<Event>,
     from_client: mpsc::Receiver<Error>,
 }
 
-impl<Ip: IpAddress> Handle<Ip> {
-    pub(crate) fn new(
-        to_client: mpsc::Sender<Event<Ip>>,
-        from_client: mpsc::Receiver<Error>,
-    ) -> Self {
+impl Handle {
+    pub(crate) fn new(to_client: mpsc::Sender<Event>, from_client: mpsc::Receiver<Error>) -> Self {
         Handle {
             to_client,
             from_client,
@@ -136,13 +133,13 @@ pub enum RequestType {
 // TODO: modify this trait to be implemented on the Requestable items instead that on the Handle
 
 /// Allows an `Handler` to request mappings via a `Client`
-pub trait Request<Ip: IpAddress, M: Map<Ip>> {
+pub trait Request<M: Map> {
     /// Send the request to the `Client` that will then send it to the server
-    fn request(&self, map: M, kind: RequestType) -> Result<MapHandle<Ip>, Error>;
+    fn request(&self, map: M, kind: RequestType) -> Result<MapHandle, Error>;
 }
 
-impl<Ip: IpAddress> Request<Ip, InboundMap<Ip>> for Handle<Ip> {
-    fn request(&self, map: InboundMap<Ip>, kind: RequestType) -> Result<MapHandle<Ip>, Error> {
+impl Request<InboundMap> for Handle {
+    fn request(&self, map: InboundMap, kind: RequestType) -> Result<MapHandle, Error> {
         let (id_tx, id_rx) = mpsc::channel();
         let (alert_tx, alert_rx) = mpsc::channel();
         let state = Arc::new(AtomicState::new(State::Requested));
@@ -163,8 +160,8 @@ impl<Ip: IpAddress> Request<Ip, InboundMap<Ip>> for Handle<Ip> {
     }
 }
 
-impl<Ip: IpAddress> Request<Ip, OutboundMap<Ip>> for Handle<Ip> {
-    fn request(&self, map: OutboundMap<Ip>, kind: RequestType) -> Result<MapHandle<Ip>, Error> {
+impl Request<OutboundMap> for Handle {
+    fn request(&self, map: OutboundMap, kind: RequestType) -> Result<MapHandle, Error> {
         let (id_tx, id_rx) = mpsc::channel();
         let (alert_tx, alert_rx) = mpsc::channel();
         let state = Arc::new(AtomicState::new(State::Requested));
@@ -185,7 +182,7 @@ impl<Ip: IpAddress> Request<Ip, OutboundMap<Ip>> for Handle<Ip> {
     }
 }
 
-impl<Ip: IpAddress> Drop for Handle<Ip> {
+impl Drop for Handle {
     fn drop(&mut self) {
         self.to_client.send(Event::Shutdown).ok();
     }

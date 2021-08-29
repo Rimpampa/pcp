@@ -87,8 +87,8 @@ impl MappingState {
         MappingState {
             to_handle,
             state,
-            request,
             delay,
+            request,
             buffer,
             kind,
         }
@@ -112,25 +112,25 @@ impl MappingState {
 }
 
 /// An handle to a requested mapping
-pub struct MapHandle<Ip: IpAddress> {
+pub struct MapHandle {
     state: Arc<AtomicState>,
     id: usize,
     /// Channel used to send instructions to the PCP client thread
-    to_client: mpsc::Sender<Event<Ip>>,
+    to_client: mpsc::Sender<Event>,
     /// Channel used to receive alerts from the PCP client thread
     from_client: mpsc::Receiver<Alert>,
 }
 
-impl<Ip: IpAddress> MapHandle<Ip> {
+impl MapHandle {
     pub(crate) fn new(
         id: usize,
         state: Arc<AtomicState>,
-        to_client: mpsc::Sender<Event<Ip>>,
+        to_client: mpsc::Sender<Event>,
         from_client: mpsc::Receiver<Alert>,
     ) -> Self {
         Self {
-            id,
             state,
+            id,
             to_client,
             from_client,
         }
@@ -162,7 +162,7 @@ impl<Ip: IpAddress> MapHandle<Ip> {
     }
 }
 
-impl<Ip: IpAddress> Drop for MapHandle<Ip> {
+impl Drop for MapHandle {
     fn drop(&mut self) {
         self.to_client.send(Event::Drop(self.id)).ok();
     }

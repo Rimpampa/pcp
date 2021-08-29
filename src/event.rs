@@ -1,6 +1,6 @@
 use crate::types::{
-    MapResponsePayload, OpCode, PacketOption, PeerResponsePayload, ResponsePacket, ResponsePayload,
-    ResultCode,
+    MapResponsePayload, OpCode, PacketOption, PeerResponsePayload, RequestPacket, ResponsePacket,
+    ResponsePayload, ResultCode,
 };
 
 use super::handle::{Error, RequestType};
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 /// Events that a PCP has to process
-pub enum Event<Ip: IpAddress> {
+pub enum Event {
     /// The server sent an announce respone packet
     AnnounceResponse {
         /// Instant of when the packet has arrived
@@ -46,7 +46,7 @@ pub enum Event<Ip: IpAddress> {
     /// The handler requests an inbound mapping; the first Sender tells the map handler the id of
     /// the mapping
     InboundMap(
-        InboundMap<Ip>,
+        InboundMap,
         RequestType,
         Arc<AtomicState>,
         mpsc::Sender<Option<usize>>,
@@ -55,7 +55,7 @@ pub enum Event<Ip: IpAddress> {
     /// The handler requests an outbound mapping; the first Sender tells the map handler the id of
     /// the mapping
     OutboundMap(
-        OutboundMap<Ip>,
+        OutboundMap,
         RequestType,
         Arc<AtomicState>,
         mpsc::Sender<Option<usize>>,
@@ -75,7 +75,7 @@ pub enum Event<Ip: IpAddress> {
     ListenError(Error),
 }
 
-impl<Ip: IpAddress> Event<Ip> {
+impl Event {
     /// Function used for processing a `ResponsePacketSlice`
     pub fn packet_event(packet: ResponsePacket) -> Self {
         match packet.header.opcode {
@@ -136,7 +136,7 @@ pub struct Delay {
 impl Delay {
     /// Creates a `Delay` event that will be sent through the event `channel` after the secified
     /// amount of `time`
-    pub fn by<Ip: IpAddress>(time: Duration, id: usize, channel: mpsc::Sender<Event<Ip>>) -> Self {
+    pub fn by(time: Duration, id: usize, channel: mpsc::Sender<Event>) -> Self {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             thread::sleep(time);
@@ -153,14 +153,7 @@ impl Delay {
     pub fn ignore(&mut self) -> bool {
         self.signal
             .take()
-            .map(|channel| match channel.send(()) {
-                Ok(()) => true,
-                _ => false,
-            })
+            .map(|channel| matches!(channel.send(()), Ok(_)))
             .unwrap_or(false)
     }
-
-    // pub fn is_waiting(&self) -> bool {
-    //     self.signal.is_some()
-    // }
 }
