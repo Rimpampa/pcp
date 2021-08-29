@@ -1,6 +1,6 @@
 use crate::types::{
-    MapResponsePayload, OpCode, PacketOption, PeerResponsePayload, RequestPacket, ResponsePacket,
-    ResponsePayload, ResultCode,
+    Epoch, MapResponsePayload, OpCode, PacketOption, PeerResponsePayload, RequestPacket,
+    ResponsePacket, ResponsePayload, ResultCode,
 };
 
 use super::handle::{Error, RequestType};
@@ -17,16 +17,14 @@ pub enum Event {
     /// The server sent an announce respone packet
     AnnounceResponse {
         /// Instant of when the packet has arrived
-        now: Instant,
+        epoch: Epoch,
         result: ResultCode,
-        epoch: u32,
     },
     /// The server sent a map respone packet
     MapResponse {
         /// Instant of when the packet has arrived
-        now: Instant,
+        epoch: Epoch,
         result: ResultCode,
-        epoch: u32,
         /// Assigned lifetime
         lifetime: u32,
         payload: MapResponsePayload,
@@ -35,11 +33,10 @@ pub enum Event {
     /// The server sent a peer respone packet
     PeerResponse {
         /// Instant of when the packet has arrived
-        now: Instant,
+        epoch: Epoch,
         result: ResultCode,
         /// Assigned lifetime
         lifetime: u32,
-        epoch: u32,
         payload: PeerResponsePayload,
         options: Vec<PacketOption>,
     },
@@ -89,10 +86,9 @@ impl Event {
         let header = packet.header;
 
         Event::MapResponse {
-            now: Instant::now(),
+            epoch: Epoch::new(header.epoch),
             result: header.result,
             lifetime: header.lifetime,
-            epoch: header.epoch,
             // It's granted that the packet has the Map opcode
             payload: match packet.payload {
                 ResponsePayload::Map(map) => map,
@@ -105,10 +101,9 @@ impl Event {
     pub fn peer_event(packet: ResponsePacket) -> Self {
         let header = packet.header;
         Event::PeerResponse {
-            now: Instant::now(),
+            epoch: Epoch::new(header.epoch),
             result: header.result,
             lifetime: header.lifetime,
-            epoch: header.epoch,
             // It's granted that the packet has the Peer opcode
             payload: match packet.payload {
                 ResponsePayload::Peer(peer) => peer,
@@ -121,9 +116,8 @@ impl Event {
     pub fn announce_event(packet: ResponsePacket) -> Self {
         let header = packet.header;
         Event::AnnounceResponse {
-            now: Instant::now(),
+            epoch: Epoch::new(header.epoch),
             result: header.result,
-            epoch: header.epoch,
         }
     }
 }

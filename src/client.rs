@@ -76,7 +76,7 @@ use super::event::{Delay, Event};
 use super::handle::{Error, Handle, RequestType};
 use super::state::{Alert, MappingState, State};
 use crate::types::{
-    MapRequestPayload, OpCode, PacketOption, RequestPacket, RequestPayload, ResponsePacket,
+    Epoch, MapRequestPayload, OpCode, PacketOption, RequestPacket, RequestPayload, ResponsePacket,
     ResultCode,
 };
 use rand::rngs::ThreadRng;
@@ -140,7 +140,7 @@ pub struct Client {
     /// Thread local RNG, used for generating RTs and mapping nonces
     rng: ThreadRng,
     /// Value of the current epoch time, paired with the instant of when it was received
-    epoch: Option<(u32, Instant)>,
+    epoch: Option<Epoch>,
 }
 
 impl Client {
@@ -210,25 +210,13 @@ impl Client {
     }
 
     /// Validate the epoch according to the previous one and time elapsed since then
-    fn validate_epoch(&mut self, curr_epoch: u32, now: Instant) -> Result<bool, Error> {
-        // If there is no previous epoch, just take this one as correct
-        if let Some((epoch, then)) = self.epoch {
-            // Check that it's no more than one second below the previous one
-            // and if it is, check that it roughly corresponds to the actual elapsed time
-            if curr_epoch < epoch.saturating_sub(1) || {
-                let client_delta = then.elapsed().as_secs() as u32;
-                let server_delta = curr_epoch.saturating_sub(epoch);
-
-                client_delta + 2 < server_delta - server_delta / 16
-                    || server_delta + 2 < client_delta - client_delta / 16
-            } {
-                self.server_lost_state()?;
-                // TODO: devo comunque prenderlo come buono questo?
-                return Ok(false);
-            }
+    fn validate_epoch(&mut self, curr_epoch: Epoch) -> Result<bool, Error> {
+        let res = curr_epoch.validate_epoch(self.epoch);
+        match res {
+            true => self.epoch = Some(curr_epoch),
+            false => self.server_lost_state()?,
         }
-        self.epoch = Some((curr_epoch, now));
-        Ok(true)
+        Ok(res)
     }
 
     /// When the epoch is invalid or an announce response is received it means that the server has
@@ -610,15 +598,14 @@ impl Client {
                     }
                 }
                 Event::MapResponse {
-                    now,
-                    result,
                     epoch,
+                    result,
                     lifetime,
                     payload,
                     options,
                 } => {
                     // When a response packet is received, always check if the epoch is valid
-                    if self.validate_epoch(epoch, now)? {
+                    if self.validate_epoch(epoch)? {
                         // Try to find a request that matches the response
                         if let Some(id) = self
                             .mappings
@@ -685,15 +672,14 @@ impl Client {
                     }
                 }
                 Event::PeerResponse {
-                    now,
-                    result,
                     epoch,
+                    result,
                     lifetime,
                     payload,
                     options,
                 } => {
                     // When a response packet is received, always check if the epoch is valid
-                    if self.validate_epoch(epoch, now)? {
+                    if self.validate_epoch(epoch)? {
                         // Try to find a request that matches the response
                         if let Some(id) = self
                             .mappings
@@ -754,12 +740,11 @@ impl Client {
                     }
                 }
                 Event::AnnounceResponse {
-                    now,
-                    result: ResultCode::Success,
                     epoch,
+                    result: ResultCode::Success,
                 } => {
                     // When a response packet is received, always check if the epoch is valid
-                    if self.validate_epoch(epoch, now)? {
+                    if self.validate_epoch(epoch)? {
                         // The announce opcode signals that the server lost its state
                         self.server_lost_state()?;
                     }

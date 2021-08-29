@@ -36,7 +36,7 @@ mod parsing_error;
 mod protocols;
 mod result_code;
 
-use std::ops::Index;
+use std::{ops::Index, time::Instant};
 
 pub use base::*;
 pub use op_code::OpCode;
@@ -45,3 +45,43 @@ pub use packet::*;
 pub use parsing_error::ParsingError;
 pub use protocols::ProtocolNumber;
 pub use result_code::ResultCode;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Epoch {
+    /// The actual value
+    value: u32,
+    /// [Instant] of when it was received
+    last_check: Instant,
+}
+
+impl Epoch {
+    /// Creates a new [Epoch] that has been received now
+    pub fn new(value: u32) -> Self {
+        Self {
+            value,
+            last_check: Instant::now(),
+        }
+    }
+    /// Creates a new [Epoch] that has been received in the instant `when`
+    pub fn new_when(value: u32, when: Instant) -> Self {
+        Self {
+            value,
+            last_check: when,
+        }
+    }
+
+    /// Validate the epoch according to the previous one and time elapsed since then
+    pub fn validate_epoch(&self, previous: Option<Epoch>) -> bool {
+        // Checks that the epoch is in range
+        let check1 = |prev: &Epoch| self.value >= prev.value.saturating_sub(1);
+        // Checks that the epoch difference corresponds to the time difference exprienced by the client
+        let check2 = |prev: &Epoch| {
+            let client = prev.last_check.elapsed().as_secs() as u32;
+            let server = self.value.saturating_sub(prev.value);
+
+            client + 2 >= server - server / 16 && server + 2 >= client - client / 16
+        };
+        // If there was no previus epoch take it as good
+        previous.filter(check1).filter(check2).is_none()
+    }
+}
