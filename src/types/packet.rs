@@ -312,3 +312,40 @@ impl TryFrom<&[u8]> for ResponsePacket {
         })
     }
 }
+
+impl PartialEq<RequestPacket> for ResponsePacket {
+    fn eq(&self, other: &RequestPacket) -> bool {
+        use RequestPayload as Req;
+        use ResponsePayload as Res;
+
+        let check_payload = match (&self.payload, &other.payload) {
+            (Res::Announce, Req::Announce) => true,
+            (Res::Map(res), Req::Map(req)) => {
+                // Do not check the external address as the server can choose anything
+                res.protocol == req.protocol
+                    && (res.external_port == req.external_port || req.external_port == 0)
+                    && res.internal_port == req.internal_port
+                    && res.nonce == req.nonce
+            }
+            (Res::Peer(res), Req::Peer(req)) => {
+                res.protocol == req.protocol
+                    && (res.external_port == req.external_port || req.external_port == 0)
+                    && res.internal_port == req.internal_port
+                    && res.nonce == req.nonce
+                    && res.remote_addr == req.remote_addr
+                    && res.remote_port == req.remote_port
+            }
+            _ => false,
+        };
+
+        self.header.opcode == other.header.opcode
+            && self.header.version == other.header.version
+            && check_payload
+    }
+}
+
+impl PartialEq<ResponsePacket> for RequestPacket {
+    fn eq(&self, other: &ResponsePacket) -> bool {
+        other == self
+    }
+}
