@@ -76,8 +76,8 @@ use super::event::{Delay, Event};
 use super::handle::{Error, Handle, RequestType};
 use super::state::{Alert, MappingState, State};
 use crate::types::{
-    Epoch, MapRequestPayload, OpCode, PacketOption, RequestPacket, RequestPayload, ResponsePacket,
-    ResultCode,
+    Epoch, MapRequestPayload, MapResponsePayload, OpCode, PacketOption, PeerResponsePayload,
+    RequestPacket, RequestPayload, ResponsePacket, ResponsePayload, ResultCode,
 };
 use rand::rngs::ThreadRng;
 use rand::{Rng, RngCore};
@@ -597,161 +597,70 @@ impl Client {
                         _ => (),
                     }
                 }
-                Event::MapResponse {
-                    epoch,
-                    result,
-                    lifetime,
-                    payload,
-                    options,
-                } => {
-                    // When a response packet is received, always check if the epoch is valid
-                    if self.validate_epoch(epoch)? {
-                        // Try to find a request that matches the response
-                        if let Some(id) = self
-                            .mappings
-                            .iter()
-                            .enumerate()
-                            // Take only the map requests
-                            .filter(|(_, m)| m.request.header.opcode == OpCode::Map)
-                            // Find the match and return only the index
-                            .find_map(|(i, m)| {
-                                let map_options = &m.request.options;
-                                // It has already been established that those are map requests
-                                let map_payload = match m.request.payload {
-                                    RequestPayload::Map(ref p) => p,
-                                    _ => unreachable!(),
-                                };
-                                if map_payload.nonce == payload.nonce
-                                    && map_payload.internal_port == payload.internal_port
-                                    && map_payload.protocol == payload.protocol
-                                    && map_options.iter().zip(options.iter()).all(|(a, b)| a == b)
-                                {
-                                    Some(i)
-                                } else {
-                                    None
-                                }
+                Event::ServerResponse(when, packet) => {
+                    use ResponsePayload::*;
+
+                    //
+                    let curr_epoch = Epoch::new_when(packet.header.epoch, when);
+                    if self.validate_epoch(curr_epoch)? {
+                        match packet.payload {
+                            // Announce error responses shouldn't even be sent, but if one still arrives
+                            // it gets ignored
+                            Announce if packet.header.result != ResultCode::Success => (),
+                            Announce => self.server_lost_state()?,
+                            Map(MapResponsePayload {
+                                external_addr: addr,
+                                external_port: port,
+                                ..
                             })
-                        {
-                            let mapping = &mut self.mappings[id];
-                            mapping.delay.ignore();
+                            | Peer(PeerResponsePayload {
+                                external_addr: addr,
+                                external_port: port,
+                                ..
+                            }) => {
+                                match self.mappings.iter().position(|v| v.request == packet) {
+                                    Some(idx) if packet.header.result == ResultCode::Success => {
+                                        let mapping = &mut self.mappings[idx];
+                                        let m_lifetime = mapping.request.header.lifetime;
+                                        let p_lifetime = packet.header.lifetime;
 
-                            match result {
-                                ResultCode::Success => {
-                                    // It's not granted that the requested lifetime matches the
-                                    // assigned one
-                                    if mapping.request.header.lifetime != lifetime {
-                                        mapping.request.header.lifetime = lifetime;
-                                        mapping.buffer = None;
+                                        mapping.delay.ignore();
+                                        // It's not granted that the requested lifetime matches the
+                                        // assigned one
+                                        if m_lifetime != p_lifetime {
+                                            mapping.request.header.lifetime = p_lifetime;
+                                            mapping.buffer = None;
+                                        }
+                                        // After a success response the mapping is running
+                                        mapping.set_state(State::Running);
+
+                                        let alert = Alert::Assigned(addr.into(), port, p_lifetime);
+                                        mapping.alert(alert);
+
+                                        let wait = match mapping.kind {
+                                            RequestType::Once | RequestType::Repeat(0) => {
+                                                Duration::from_secs(m_lifetime as u64)
+                                            }
+                                            RequestType::KeepAlive | RequestType::Repeat(_) => {
+                                                Self::jitter_lifetime(&mut self.rng, m_lifetime, 0)
+                                                    .unwrap_or_default()
+                                            }
+                                        };
+                                        // Set the delay for when it expires
+                                        mapping.delay =
+                                            Delay::by(wait, idx, self.event_source.clone())
                                     }
-                                    // After a success response the mapping is running
-                                    mapping.set_state(State::Running);
-
-                                    mapping.alert(Alert::Assigned(
-                                        IpAddr::V6(payload.external_addr),
-                                        payload.external_port,
-                                        lifetime,
-                                    ));
-
-                                    let wait = match mapping.kind {
-                                        RequestType::Once | RequestType::Repeat(0) => {
-                                            Duration::from_secs(lifetime as u64)
-                                        }
-                                        RequestType::KeepAlive | RequestType::Repeat(_) => {
-                                            Self::jitter_lifetime(&mut self.rng, lifetime, 0)
-                                                .unwrap_or_default()
-                                        }
-                                    };
-
-                                    // Set the delay for when it expires
-                                    mapping.delay = Delay::by(wait, id, self.event_source.clone())
+                                    Some(idx) => {
+                                        let mapping = &mut self.mappings[idx];
+                                        mapping.delay.ignore();
+                                        mapping.set_state(State::Error(packet.header.result))
+                                    }
+                                    None => (),
                                 }
-                                // On an error response, se the state of the mapping
-                                error => mapping.set_state(State::Error(error)),
                             }
                         }
                     }
                 }
-                Event::PeerResponse {
-                    epoch,
-                    result,
-                    lifetime,
-                    payload,
-                    options,
-                } => {
-                    // When a response packet is received, always check if the epoch is valid
-                    if self.validate_epoch(epoch)? {
-                        // Try to find a request that matches the response
-                        if let Some(id) = self
-                            .mappings
-                            .iter()
-                            .enumerate()
-                            // Take only the peer requests
-                            .filter(|(_, m)| m.request.header.opcode == OpCode::Peer)
-                            // Find the match and return only the index
-                            .find_map(|(i, m)| {
-                                let peer_options = &m.request.options;
-                                // It has already been established that those are peer requests
-                                let peer_payload = match m.request.payload {
-                                    RequestPayload::Peer(ref p) => p,
-                                    _ => unreachable!(),
-                                };
-                                if peer_payload.nonce == payload.nonce
-                                    && peer_payload.internal_port == payload.internal_port
-                                    && peer_payload.protocol == payload.protocol
-                                    && peer_options.iter().zip(options.iter()).all(|(a, b)| a == b)
-                                {
-                                    Some(i)
-                                } else {
-                                    None
-                                }
-                            })
-                        {
-                            let mapping = &mut self.mappings[id];
-                            mapping.delay.ignore();
-
-                            match result {
-                                ResultCode::Success => {
-                                    // It's not granted that the requested lifetime matches the
-                                    // assigned one
-                                    if mapping.request.header.lifetime != lifetime {
-                                        mapping.request.header.lifetime = lifetime;
-                                        mapping.buffer = None;
-                                    }
-                                    // After a success response the mapping is running
-                                    mapping.set_state(State::Running);
-
-                                    let wait = match mapping.kind {
-                                        RequestType::Once | RequestType::Repeat(0) => {
-                                            Duration::from_secs(lifetime as u64)
-                                        }
-                                        RequestType::KeepAlive | RequestType::Repeat(_) => {
-                                            Self::jitter_lifetime(&mut self.rng, lifetime, 0)
-                                                .unwrap_or_default()
-                                        }
-                                    };
-
-                                    // Set the delay for when it expires
-                                    mapping.delay = Delay::by(wait, id, self.event_source.clone())
-                                }
-                                // On an error response, se the state of the mapping
-                                error => mapping.set_state(State::Error(error)),
-                            }
-                        }
-                    }
-                }
-                Event::AnnounceResponse {
-                    epoch,
-                    result: ResultCode::Success,
-                } => {
-                    // When a response packet is received, always check if the epoch is valid
-                    if self.validate_epoch(epoch)? {
-                        // The announce opcode signals that the server lost its state
-                        self.server_lost_state()?;
-                    }
-                }
-                // Announce error responses shouldn't even be sent, but if one still arrives
-                // it gets ignored
-                Event::AnnounceResponse { .. } => (),
                 Event::Shutdown => return Ok(()),
                 Event::ListenError(error) => return Err(error),
             }

@@ -14,32 +14,8 @@ use std::time::{Duration, Instant};
 #[derive(Debug)]
 /// Events that a PCP has to process
 pub enum Event {
-    /// The server sent an announce respone packet
-    AnnounceResponse {
-        /// Instant of when the packet has arrived
-        epoch: Epoch,
-        result: ResultCode,
-    },
-    /// The server sent a map respone packet
-    MapResponse {
-        /// Instant of when the packet has arrived
-        epoch: Epoch,
-        result: ResultCode,
-        /// Assigned lifetime
-        lifetime: u32,
-        payload: MapResponsePayload,
-        options: Vec<PacketOption>,
-    },
-    /// The server sent a peer respone packet
-    PeerResponse {
-        /// Instant of when the packet has arrived
-        epoch: Epoch,
-        result: ResultCode,
-        /// Assigned lifetime
-        lifetime: u32,
-        payload: PeerResponsePayload,
-        options: Vec<PacketOption>,
-    },
+    /// The server sent a respone packet
+    ServerResponse(Instant, ResponsePacket),
     /// The handler requests an inbound mapping; the first Sender tells the map handler the id of
     /// the mapping
     InboundMap(
@@ -74,51 +50,8 @@ pub enum Event {
 
 impl Event {
     /// Function used for processing a `ResponsePacketSlice`
-    pub fn packet_event(packet: ResponsePacket) -> Self {
-        match packet.header.opcode {
-            OpCode::Announce => Self::announce_event(packet),
-            OpCode::Map => Self::map_event(packet),
-            OpCode::Peer => Self::peer_event(packet),
-        }
-    }
-    /// Returns a `MapResponse` event
-    pub fn map_event(packet: ResponsePacket) -> Self {
-        let header = packet.header;
-
-        Event::MapResponse {
-            epoch: Epoch::new(header.epoch),
-            result: header.result,
-            lifetime: header.lifetime,
-            // It's granted that the packet has the Map opcode
-            payload: match packet.payload {
-                ResponsePayload::Map(map) => map,
-                _ => unreachable!(),
-            },
-            options: packet.options,
-        }
-    }
-    /// Returns a `PeerResponse` event
-    pub fn peer_event(packet: ResponsePacket) -> Self {
-        let header = packet.header;
-        Event::PeerResponse {
-            epoch: Epoch::new(header.epoch),
-            result: header.result,
-            lifetime: header.lifetime,
-            // It's granted that the packet has the Peer opcode
-            payload: match packet.payload {
-                ResponsePayload::Peer(peer) => peer,
-                _ => unreachable!(),
-            },
-            options: packet.options,
-        }
-    }
-    /// Returns a `AnnounceResponse` event
-    pub fn announce_event(packet: ResponsePacket) -> Self {
-        let header = packet.header;
-        Event::AnnounceResponse {
-            epoch: Epoch::new(header.epoch),
-            result: header.result,
-        }
+    pub fn packet_event(response: ResponsePacket) -> Self {
+        Self::ServerResponse(Instant::now(), response)
     }
 }
 
