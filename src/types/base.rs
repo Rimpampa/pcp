@@ -837,7 +837,6 @@ mod tests {
     #[test]
     fn roundtrip() {
         use OpCode::*;
-        use OptionCode::*;
         use ResultCode::*;
 
         // Headers - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

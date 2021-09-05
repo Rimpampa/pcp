@@ -73,19 +73,20 @@
 //! arrives, which means that the server had some problems and lost it's state.
 
 use super::event::{Delay, Event};
-use super::handle::{Error, Handle, RequestType};
-use super::state::{Alert, MappingState, State};
+use super::handle::{Error, RequestType};
+use crate::state::MappingState;
 use crate::types::{
-    Epoch, MapRequestPayload, MapResponsePayload, OpCode, PacketOption, PeerResponsePayload,
-    RequestPacket, RequestPayload, ResponsePacket, ResponsePayload, ResultCode,
+    Epoch, MapResponsePayload, PacketOption, PeerResponsePayload, RequestPacket, ResponsePacket,
+    ResponsePayload, ResultCode, MAX_PACKET_SIZE,
 };
+use crate::State;
 use rand::rngs::ThreadRng;
-use rand::{Rng, RngCore};
+use rand::Rng;
 use std::convert::TryFrom;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, UdpSocket};
+use std::io;
+use std::net::{IpAddr, Ipv6Addr, UdpSocket};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
-use std::{io, slice};
 
 // TODO: allow modifying those values
 
@@ -173,14 +174,8 @@ impl Client {
     /// Returns the next available index to which a new mapping can be stored; if the vector is
     /// full it'll return None, if there is an empty space it'll return its index
     fn next_index(&self) -> Option<usize> {
-        self.mappings
-            .iter()
-            .enumerate()
-            // A dropped mapping has no reason to exist anymore, thus it's index can be reused
-            .find_map(|(i, m)| match m.get_state() == State::Dropped {
-                true => Some(i),
-                false => None,
-            })
+        // A dropped mapping has no reason to exist anymore, thus it's index can be reused
+        self.mappings.iter().position(|m| m.state == State::Dropped)
     }
 
     /// Generate the noce of the mapping randomly
@@ -210,23 +205,13 @@ impl Client {
         // Resend the data for each mapping
         self.mappings
             .iter_mut()
-            .try_for_each(|map| -> io::Result<()> {
-                if let Some(ref buffer) = map.buffer {
-                    sock.send(buffer)?;
-                } else {
-                    let mut buffer = vec![0u8; map.request.size()];
-                    map.request.copy_to(&mut buffer);
-                    sock.send(&buffer)?;
-                    map.buffer = Some(buffer);
-                }
-                Ok(())
-            })?;
+            .try_for_each(|map| -> io::Result<()> { sock.send(map.bytes()).map(|_| ()) })?;
 
         let rng = &mut self.rng;
         let event_source = &self.event_source;
         // Reset the state and start the new timer for each mapping
         self.mappings.iter_mut().enumerate().for_each(|(id, map)| {
-            map.set_state(State::Starting(0));
+            map.state = State::Starting(0);
             map.delay = Delay::by(Self::generate_irt(rng), id, event_source.clone());
         });
         Ok(())
@@ -243,18 +228,11 @@ impl Client {
         match Self::jitter_lifetime(rng, map.request.header.lifetime, times) {
             Some(delay) => {
                 // Resend the request
-                if let Some(ref buf) = map.buffer {
-                    sock.send(buf)?;
-                } else {
-                    let mut buffer = vec![0u8; map.request.size()];
-                    map.request.copy_to(&mut buffer);
-                    sock.send(&buffer)?;
-                    map.buffer = Some(buffer);
-                }
-                map.set_state(State::Updating(times, map.request.header.lifetime));
+                sock.send(map.bytes())?;
+                map.state = State::Updating(times, map.request.header.lifetime);
                 map.delay = Delay::by(delay, id, tx);
             }
-            None => map.set_state(State::Expired),
+            None => map.state = State::Expired,
         }
         Ok(())
     }
@@ -324,9 +302,7 @@ impl Client {
         loop {
             match self.event_receiver.recv()? {
                 // The handler request an inbound mapping
-                Event::InboundMap(map, kind, state, handle_id, handle_alert) => {
-                    state.set(State::Starting(0));
-
+                Event::InboundMap(map, kind, handle_id, handle_alert) => {
                     // Get the index of this mapping
                     let opt_idx = self.next_index();
                     let idx = opt_idx.unwrap_or(self.mappings.len());
@@ -374,28 +350,20 @@ impl Client {
                     )
                     .unwrap();
 
+                    let delay = Delay::by(
+                        Self::generate_irt(&mut self.rng),
+                        idx,
+                        self.event_source.clone(),
+                    );
+                    // Construct the mapping
+                    let mut mapping = MappingState::new(request, delay, kind);
+
                     // Send the packet
-                    let mut buf = vec![0u8; request.size()];
-                    request.copy_to(&mut buf);
-                    self.socket.send(&buf).map_err(|err| {
+                    self.socket.send(mapping.bytes()).map_err(|err| {
                         handle_id.send(None).ok();
                         Error::from(err)
                     })?;
                     handle_id.send(Some(idx)).ok();
-
-                    // Construct the mapping
-                    let mapping = MappingState::new(
-                        handle_alert,
-                        state,
-                        request,
-                        Delay::by(
-                            Self::generate_irt(&mut self.rng),
-                            idx,
-                            self.event_source.clone(),
-                        ),
-                        Some(buf),
-                        kind,
-                    );
 
                     // Insert the mapping in the list
                     match opt_idx {
@@ -404,15 +372,13 @@ impl Client {
                     }
                 }
                 // The handler request an outbound mapping
-                Event::OutboundMap(map, kind, state, handle_id, handle_alert) => {
-                    state.set(State::Starting(0));
-
+                Event::OutboundMap(map, kind, handle_id, handle_alert) => {
                     // Get the index of this mapping
                     let opt_idx = self.next_index();
                     let idx = opt_idx.unwrap_or(self.mappings.len());
 
                     // Construct a vector with all the options
-                    let mut options = match map.third_party {
+                    let options = match map.third_party {
                         Some(addr) => vec![PacketOption::third_party(addr)],
                         None => Vec::new(),
                     };
@@ -436,28 +402,20 @@ impl Client {
                     )
                     .unwrap();
 
+                    let delay = Delay::by(
+                        Self::generate_irt(&mut self.rng),
+                        idx,
+                        self.event_source.clone(),
+                    );
+                    // Construct the mapping
+                    let mut mapping = MappingState::new(request, delay, kind);
+
                     // Send the packet
-                    let mut buf = vec![0u8; request.size()];
-                    request.copy_to(&mut buf);
-                    self.socket.send(&buf).map_err(|err| {
+                    self.socket.send(mapping.bytes()).map_err(|err| {
                         handle_id.send(None).ok();
                         Error::from(err)
                     })?;
                     handle_id.send(Some(idx)).ok();
-
-                    // Construct the mapping
-                    let mapping = MappingState::new(
-                        handle_alert,
-                        state,
-                        request,
-                        Delay::by(
-                            Self::generate_irt(&mut self.rng),
-                            idx,
-                            self.event_source.clone(),
-                        ),
-                        Some(buf),
-                        kind,
-                    );
 
                     // Insert the mapping in the vector
                     match opt_idx {
@@ -475,18 +433,18 @@ impl Client {
                     }];
                     // Delete the lifetime and reset the buffer
                     mapping.request.header.lifetime = 0;
-                    mapping.buffer = None;
+                    mapping.clear();
                     mapping.delay.ignore();
                     // Send the packet with the 0 lifetime
                     let mut buffer = vec![0u8; mapping.request.size()];
                     mapping.request.copy_to(&mut buffer);
                     self.socket.send(&buffer)?;
 
-                    mapping.set_state(match ev {
+                    mapping.state = match ev {
                         Event::Revoke(_) => State::Revoked,
                         Event::Drop(_) => State::Dropped,
                         _ => unreachable!(),
-                    });
+                    };
                 }
                 // The handler requests to renew a mapping
                 Event::Renew(id, lifetime) => {
@@ -495,12 +453,9 @@ impl Client {
                     mapping.request.header.lifetime = lifetime;
                     mapping.delay.ignore();
                     // Update the buffer and send the packet
-                    let mut buffer = vec![0u8; mapping.request.size()];
-                    mapping.request.copy_to(&mut buffer);
-                    self.socket.send(&buffer)?;
-                    mapping.buffer = Some(buffer);
+                    self.socket.send(mapping.bytes())?;
 
-                    mapping.set_state(State::Starting(0));
+                    mapping.state = State::Starting(0);
                     mapping.delay = Delay::by(
                         Self::generate_irt(&mut self.rng),
                         id,
@@ -518,21 +473,13 @@ impl Client {
 
     fn delay_expired(&mut self, id: usize, waited: Duration) -> Result<(), Error> {
         let mapping = &mut self.mappings[id];
-        let update = match mapping.get_state() {
+        let update = match mapping.state {
             // The mapping was in a starting state, this means that the packet was
             // already been sent n times but the server, still, didn't respond, thus
             // the client will try to send it again
             State::Starting(n) => {
-                mapping.set_state(State::Starting(n + 1));
-                // Resend the packet
-                if let Some(ref buffer) = mapping.buffer {
-                    self.socket.send(buffer)?;
-                } else {
-                    let mut buffer = vec![0u8; mapping.request.size()];
-                    mapping.request.copy_to(&mut buffer);
-                    self.socket.send(&buffer)?;
-                    mapping.buffer = Some(buffer);
-                }
+                mapping.state = State::Starting(n + 1);
+                self.socket.send(mapping.bytes())?;
                 // Restart the timer
                 mapping.delay = Delay::by(
                     Self::generate_rt(&mut self.rng, waited),
@@ -544,7 +491,7 @@ impl Client {
             // If it's running it means that the lifetime has ended
             State::Running => match mapping.kind {
                 RequestType::Once | RequestType::Repeat(0) => {
-                    mapping.set_state(State::Expired);
+                    mapping.state = State::Expired;
                     None
                 }
                 RequestType::Repeat(n) => {
@@ -596,7 +543,7 @@ impl Client {
 
                     if packet.header.result != ResultCode::Success {
                         mapping.delay.ignore();
-                        mapping.set_state(State::Error(packet.header.result));
+                        mapping.state = State::Error(packet.header.result);
                         return Ok(());
                     }
 
@@ -608,13 +555,13 @@ impl Client {
                     // assigned one
                     if m_lifetime != p_lifetime {
                         mapping.request.header.lifetime = p_lifetime;
-                        mapping.buffer = None;
+                        mapping.clear();
                     }
                     // After a success response the mapping is running
-                    mapping.set_state(State::Running);
+                    mapping.state = State::Running;
 
-                    let alert = Alert::Assigned(addr.into(), port, p_lifetime);
-                    mapping.alert(alert);
+                    // let alert = Alert::Assigned(addr.into(), port, p_lifetime);
+                    // mapping.alert(alert);
 
                     let wait = match mapping.kind {
                         RequestType::Once | RequestType::Repeat(0) => {
@@ -633,7 +580,7 @@ impl Client {
     }
 
     fn listen(socket: UdpSocket, to_client: mpsc::Sender<Event>) {
-        let mut buf = [0; 1011];
+        let mut buf = [0; MAX_PACKET_SIZE];
         std::thread::spawn(move || loop {
             if let Ok(bytes) = socket.recv(&mut buf) {
                 if bytes < 1011 {

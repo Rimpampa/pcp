@@ -1,34 +1,9 @@
-use super::event::{Delay, Event};
+use super::event::Delay;
 use super::handle::RequestType;
-use super::IpAddress;
-use crate::types::{RequestPacket, ResultCode};
+use crate::types::{RequestPacket, ResultCode, MAX_PACKET_SIZE};
+use crate::Client;
+use std::io::ErrorKind;
 use std::net::IpAddr;
-use std::sync::mpsc::{self, RecvError};
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
-
-// TODO: do I need AtomicState if I send an Alert?
-
-// TODO: don't use .ok()
-
-/// A wrapper around the `State` enum that can be shared as modified between threads safely
-#[derive(Debug)]
-pub struct AtomicState(RwLock<State>);
-
-impl AtomicState {
-    /// Creates a new `AtomicState`
-    pub fn new(init: State) -> Self {
-        Self(RwLock::new(init))
-    }
-    /// Sets the state value
-    pub fn set(&self, value: State) {
-        *self.0.write().unwrap() = value;
-    }
-    /// Returns the state
-    pub fn get(&self) -> State {
-        *self.0.read().unwrap()
-    }
-}
 
 /// A notitification sent when the state of a mapping changes
 /// or when the external address selected by the server is recieved
@@ -59,34 +34,27 @@ pub enum State {
     Dropped,
 }
 
-// TODO: non usare un Option<Vec<u8>> ma trova un modo di non dover reallocare ogni volta
-
 /// Represents the current state of a mapping and its data
 pub struct MappingState {
     /// Channel used to send alerts to the handle
-    to_handle: mpsc::Sender<Alert>,
-    state: Arc<AtomicState>,
+    pub state: State,
     pub delay: Delay,
     /// Request data with the filed parsed
     pub request: RequestPacket,
-    /// Request data as a `Vec<u8>`
-    pub buffer: Option<Vec<u8>>,
+    /// Request data as raw bytes
+    buffer: [u8; MAX_PACKET_SIZE],
+    size: usize,
     /// Type of request
     pub kind: RequestType,
 }
 
 impl MappingState {
-    pub fn new(
-        to_handle: mpsc::Sender<Alert>,
-        state: Arc<AtomicState>,
-        request: RequestPacket,
-        delay: Delay,
-        buffer: Option<Vec<u8>>,
-        kind: RequestType,
-    ) -> Self {
-        MappingState {
-            to_handle,
-            state,
+    pub fn new(request: RequestPacket, delay: Delay, kind: RequestType) -> Self {
+        let mut buffer = [0; MAX_PACKET_SIZE];
+        request.copy_to(&mut buffer);
+        Self {
+            state: State::Starting(0),
+            size: request.size(),
             delay,
             request,
             buffer,
@@ -94,76 +62,52 @@ impl MappingState {
         }
     }
 
-    /// Sets the state of the mapping an alerts the handle of a state change
-    pub fn set_state(&self, state: State) {
-        self.state.set(state);
-        self.to_handle.send(Alert::StateChange).ok();
+    pub fn bytes(&mut self) -> &[u8] {
+        if self.size == 0 {
+            self.update_size();
+            self.request.copy_to(&mut self.buffer);
+        }
+        &self.buffer[..self.size]
     }
 
-    /// Returns the state of the mapping
-    pub fn get_state(&self) -> State {
-        self.state.get()
+    pub fn clear(&mut self) {
+        self.size = 0;
     }
 
-    /// Sends an alert to the handle
-    pub fn alert(&self, alert: Alert) {
-        self.to_handle.send(alert).ok();
+    pub fn update_size(&mut self) {
+        self.size = self.request.size()
     }
 }
 
 /// An handle to a requested mapping
-pub struct MapHandle {
-    state: Arc<AtomicState>,
+pub struct MapHandle<'a> {
+    client: &'a Client,
     id: usize,
-    /// Channel used to send instructions to the PCP client thread
-    to_client: mpsc::Sender<Event>,
-    /// Channel used to receive alerts from the PCP client thread
-    from_client: mpsc::Receiver<Alert>,
 }
 
-impl MapHandle {
-    pub(crate) fn new(
-        id: usize,
-        state: Arc<AtomicState>,
-        to_client: mpsc::Sender<Event>,
-        from_client: mpsc::Receiver<Alert>,
-    ) -> Self {
-        Self {
-            state,
-            id,
-            to_client,
-            from_client,
-        }
-    }
+impl<'a> MapHandle<'a> {
+    // /// Returns the state of the mapping
+    // pub fn state(&self) -> State {
+    //     self.state.get()
+    // }
 
-    /// Returns the state of the mapping
-    pub fn state(&self) -> State {
-        self.state.get()
-    }
+    // /// Requests to renew the mapping for the specified lifetime
+    // pub fn renew(&self, lifetime: u32) {
+    //     self.to_client.send(Event::Renew(self.id, lifetime)).ok();
+    // }
 
-    /// Requests to renew the mapping for the specified lifetime
-    pub fn renew(&self, lifetime: u32) {
-        self.to_client.send(Event::Renew(self.id, lifetime)).ok();
-    }
+    // /// Requests to revoke the mapping
+    // pub fn revoke(&self) {
+    //     self.to_client.send(Event::Revoke(self.id)).ok();
+    // }
 
-    /// Requests to revoke the mapping
-    pub fn revoke(&self) {
-        self.to_client.send(Event::Revoke(self.id)).ok();
-    }
+    // /// Waits for an alert to arrive
+    // pub fn wait_alert(&self) -> Result<Alert, RecvError> {
+    //     self.from_client.recv()
+    // }
 
-    /// Waits for an alert to arrive
-    pub fn wait_alert(&self) -> Result<Alert, RecvError> {
-        self.from_client.recv()
-    }
-
-    /// Returns the first alert received if there is one
-    pub fn poll_alert(&self) -> Option<Alert> {
-        self.from_client.try_recv().ok()
-    }
-}
-
-impl Drop for MapHandle {
-    fn drop(&mut self) {
-        self.to_client.send(Event::Drop(self.id)).ok();
-    }
+    // /// Returns the first alert received if there is one
+    // pub fn poll_alert(&self) -> Option<Alert> {
+    //     self.from_client.try_recv().ok()
+    // }
 }

@@ -1,13 +1,8 @@
-use crate::types::{
-    Epoch, MapResponsePayload, OpCode, PacketOption, PeerResponsePayload, RequestPacket,
-    ResponsePacket, ResponsePayload, ResultCode,
-};
-
+use crate::types::ResponsePacket;
 use super::handle::{Error, RequestType};
 use super::map::{InboundMap, OutboundMap};
-use super::state::{Alert, AtomicState};
-use super::IpAddress;
-use std::sync::{mpsc, Arc};
+use super::state::Alert;
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -21,7 +16,6 @@ pub enum Event {
     InboundMap(
         InboundMap,
         RequestType,
-        Arc<AtomicState>,
         mpsc::Sender<Option<usize>>,
         mpsc::Sender<Alert>,
     ),
@@ -30,7 +24,6 @@ pub enum Event {
     OutboundMap(
         OutboundMap,
         RequestType,
-        Arc<AtomicState>,
         mpsc::Sender<Option<usize>>,
         mpsc::Sender<Alert>,
     ),

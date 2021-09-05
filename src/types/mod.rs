@@ -36,7 +36,7 @@ mod parsing_error;
 mod protocols;
 mod result_code;
 
-use std::{ops::Index, time::Instant};
+use std::time::Instant;
 
 pub use base::*;
 pub use op_code::OpCode;

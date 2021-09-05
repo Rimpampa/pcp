@@ -1,13 +1,12 @@
 use super::*;
 use crate::ProtocolNumber;
 use std::{
-    borrow::Borrow,
     convert::{TryFrom, TryInto},
     net::Ipv6Addr,
 };
 
 /// Maximum size a PCP packet can have
-const MAX_PACKET_SIZE: usize = 1100;
+pub const MAX_PACKET_SIZE: usize = 1100;
 
 // =========================================== OPTIONS ============================================
 

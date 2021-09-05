@@ -77,7 +77,6 @@
 
 // TODO: expand documentation
 
-#![allow(unused)]
 mod client;
 mod event;
 mod handle;
