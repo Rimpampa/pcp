@@ -183,30 +183,9 @@ impl Client {
             })
     }
 
-    // TODO: is it correct to use the nonce to distinguish between mappings?
-
-    // fn generate_nonce(&mut self, id: usize) -> [u8; 12] {
-    // 	let mut buf = [0; 12];
-    // 	#[cfg(target_pointer_width = "32")]
-    // 	{
-    //     	buf[..4].copy_from_slice(&id.to_be_bytes());
-    //     	self.rng.fill_bytes(&mut buf[4..]);
-    // 	}
-    // 	#[cfg(target_pointer_width = "64")]
-    // 	{
-    //     	buf[..8].copy_from_slice(&id.to_be_bytes());
-    //     	self.rng.fill_bytes(&mut buf[8..]);
-    // 	}
-    //     buf
-    // }
-
-    /// Generate the noce by using the id of the mapping as the first byte (making it unique for
-    /// each mapping)
-    fn generate_nonce(&mut self, id: u8) -> [u8; 12] {
-        let mut buf = [0; 12];
-        buf[0] = id;
-        self.rng.fill_bytes(&mut buf[1..]);
-        buf
+    /// Generate the noce of the mapping randomly
+    fn generate_nonce(&mut self) -> [u8; 12] {
+        self.rng.gen()
     }
 
     /// Validate the epoch according to the previous one and time elapsed since then
@@ -386,7 +365,7 @@ impl Client {
                             IpAddr::V4(v4) => v4.to_ipv6_mapped(),
                             IpAddr::V6(v6) => v6,
                         },
-                        self.generate_nonce(idx as u8),
+                        self.generate_nonce(),
                         map.protocol,
                         map.internal_port,
                         map.external_port.unwrap_or(0),
@@ -446,7 +425,7 @@ impl Client {
                             IpAddr::V4(v4) => v4.to_ipv6_mapped(),
                             IpAddr::V6(v6) => v6,
                         },
-                        self.generate_nonce(idx as u8),
+                        self.generate_nonce(),
                         map.protocol,
                         map.internal_port,
                         map.external_port.unwrap_or(0),
@@ -486,23 +465,14 @@ impl Client {
                         None => self.mappings.push(mapping),
                     }
                 }
-                // The relative handle of this mapping has been dropped
-                Event::Drop(id) => {
+                // The relative handle of this mapping has been dropped or
+                // the handler requests to revoke a mapping
+                ev @ Event::Drop(_) | ev @ Event::Revoke(_) => {
                     // TODO: accertarsi che sia davvero avvenuto
-                    let mapping = &mut self.mappings[id];
-                    mapping.request.header.lifetime = 0;
-                    mapping.buffer = None;
-                    mapping.delay.ignore();
-                    let mut buffer = vec![0u8; mapping.request.size()];
-                    mapping.request.copy_to(&mut buffer);
-                    self.socket.send(&buffer)?;
-
-                    mapping.set_state(State::Dropped);
-                }
-                // The handler requests to revoke a mapping
-                Event::Revoke(id) => {
-                    // TODO: accertarsi che sia davvero avvenuto
-                    let mapping = &mut self.mappings[id];
+                    let mapping = &mut self.mappings[match ev {
+                        Event::Revoke(id) | Event::Drop(id) => id,
+                        _ => unreachable!(),
+                    }];
                     // Delete the lifetime and reset the buffer
                     mapping.request.header.lifetime = 0;
                     mapping.buffer = None;
@@ -512,7 +482,11 @@ impl Client {
                     mapping.request.copy_to(&mut buffer);
                     self.socket.send(&buffer)?;
 
-                    mapping.set_state(State::Revoked);
+                    mapping.set_state(match ev {
+                        Event::Revoke(_) => State::Revoked,
+                        Event::Drop(_) => State::Dropped,
+                        _ => unreachable!(),
+                    });
                 }
                 // The handler requests to renew a mapping
                 Event::Renew(id, lifetime) => {
@@ -534,137 +508,128 @@ impl Client {
                     );
                 }
                 // A delay has ended
-                Event::Delay(id, waited) => {
-                    let mapping = &mut self.mappings[id];
-                    match mapping.get_state() {
-                        // The mapping was in a starting state, this means that the packet was
-                        // already been sent n times but the server, still, didn't respond, thus
-                        // the client will try to send it again
-                        State::Starting(n) => {
-                            mapping.set_state(State::Starting(n + 1));
-                            // Resend the packet
-                            if let Some(ref buffer) = mapping.buffer {
-                                self.socket.send(buffer)?;
-                            } else {
-                                let mut buffer = vec![0u8; mapping.request.size()];
-                                mapping.request.copy_to(&mut buffer);
-                                self.socket.send(&buffer)?;
-                                mapping.buffer = Some(buffer);
-                            }
-                            // Restart the timer
-                            mapping.delay = Delay::by(
-                                Self::generate_rt(&mut self.rng, waited),
-                                id,
-                                self.event_source.clone(),
-                            );
-                        }
-                        // If it's running it means that the lifetime has ended
-                        State::Running => match mapping.kind {
-                            RequestType::Once | RequestType::Repeat(0) => {
-                                mapping.set_state(State::Expired)
-                            }
-                            RequestType::Repeat(n) => {
-                                mapping.kind = RequestType::Repeat(n - 1);
-
-                                Self::update_mapping(
-                                    &mut self.rng,
-                                    mapping,
-                                    id,
-                                    0,
-                                    &self.socket,
-                                    self.event_source.clone(),
-                                )?;
-                            }
-                            RequestType::KeepAlive => Self::update_mapping(
-                                &mut self.rng,
-                                mapping,
-                                id,
-                                0,
-                                &self.socket,
-                                self.event_source.clone(),
-                            )?,
-                        },
-                        State::Updating(n, lifetime) => {
-                            Self::update_mapping(
-                                &mut self.rng,
-                                mapping,
-                                id,
-                                n + 1,
-                                &self.socket,
-                                self.event_source.clone(),
-                            )?;
-                        }
-                        _ => (),
-                    }
-                }
-                Event::ServerResponse(when, packet) => {
-                    use ResponsePayload::*;
-
-                    //
-                    let curr_epoch = Epoch::new_when(packet.header.epoch, when);
-                    if self.validate_epoch(curr_epoch)? {
-                        match packet.payload {
-                            // Announce error responses shouldn't even be sent, but if one still arrives
-                            // it gets ignored
-                            Announce if packet.header.result != ResultCode::Success => (),
-                            Announce => self.server_lost_state()?,
-                            Map(MapResponsePayload {
-                                external_addr: addr,
-                                external_port: port,
-                                ..
-                            })
-                            | Peer(PeerResponsePayload {
-                                external_addr: addr,
-                                external_port: port,
-                                ..
-                            }) => {
-                                match self.mappings.iter().position(|v| v.request == packet) {
-                                    Some(idx) if packet.header.result == ResultCode::Success => {
-                                        let mapping = &mut self.mappings[idx];
-                                        let m_lifetime = mapping.request.header.lifetime;
-                                        let p_lifetime = packet.header.lifetime;
-
-                                        mapping.delay.ignore();
-                                        // It's not granted that the requested lifetime matches the
-                                        // assigned one
-                                        if m_lifetime != p_lifetime {
-                                            mapping.request.header.lifetime = p_lifetime;
-                                            mapping.buffer = None;
-                                        }
-                                        // After a success response the mapping is running
-                                        mapping.set_state(State::Running);
-
-                                        let alert = Alert::Assigned(addr.into(), port, p_lifetime);
-                                        mapping.alert(alert);
-
-                                        let wait = match mapping.kind {
-                                            RequestType::Once | RequestType::Repeat(0) => {
-                                                Duration::from_secs(m_lifetime as u64)
-                                            }
-                                            RequestType::KeepAlive | RequestType::Repeat(_) => {
-                                                Self::jitter_lifetime(&mut self.rng, m_lifetime, 0)
-                                                    .unwrap_or_default()
-                                            }
-                                        };
-                                        // Set the delay for when it expires
-                                        mapping.delay =
-                                            Delay::by(wait, idx, self.event_source.clone())
-                                    }
-                                    Some(idx) => {
-                                        let mapping = &mut self.mappings[idx];
-                                        mapping.delay.ignore();
-                                        mapping.set_state(State::Error(packet.header.result))
-                                    }
-                                    None => (),
-                                }
-                            }
-                        }
-                    }
-                }
+                Event::Delay(id, waited) => self.delay_expired(id, waited)?,
+                Event::ServerResponse(when, packet) => self.server_response(packet, when)?,
                 Event::Shutdown => return Ok(()),
                 Event::ListenError(error) => return Err(error),
             }
         }
+    }
+
+    fn delay_expired(&mut self, id: usize, waited: Duration) -> Result<(), Error> {
+        let mapping = &mut self.mappings[id];
+        let update = match mapping.get_state() {
+            // The mapping was in a starting state, this means that the packet was
+            // already been sent n times but the server, still, didn't respond, thus
+            // the client will try to send it again
+            State::Starting(n) => {
+                mapping.set_state(State::Starting(n + 1));
+                // Resend the packet
+                if let Some(ref buffer) = mapping.buffer {
+                    self.socket.send(buffer)?;
+                } else {
+                    let mut buffer = vec![0u8; mapping.request.size()];
+                    mapping.request.copy_to(&mut buffer);
+                    self.socket.send(&buffer)?;
+                    mapping.buffer = Some(buffer);
+                }
+                // Restart the timer
+                mapping.delay = Delay::by(
+                    Self::generate_rt(&mut self.rng, waited),
+                    id,
+                    self.event_source.clone(),
+                );
+                None
+            }
+            // If it's running it means that the lifetime has ended
+            State::Running => match mapping.kind {
+                RequestType::Once | RequestType::Repeat(0) => {
+                    mapping.set_state(State::Expired);
+                    None
+                }
+                RequestType::Repeat(n) => {
+                    mapping.kind = RequestType::Repeat(n - 1);
+                    Some(0)
+                }
+                RequestType::KeepAlive => Some(0),
+            },
+            State::Updating(n, lifetime) => Some(n + 1),
+            _ => None,
+        };
+        if let Some(times) = update {
+            Self::update_mapping(
+                &mut self.rng,
+                mapping,
+                id,
+                times,
+                &self.socket,
+                self.event_source.clone(),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn server_response(&mut self, packet: ResponsePacket, when: Instant) -> Result<(), Error> {
+        use ResponsePayload::*;
+
+        let curr_epoch = Epoch::new_when(packet.header.epoch, when);
+        if !self.validate_epoch(curr_epoch)? {
+            return Ok(());
+        }
+        match packet.payload {
+            // Announce error responses shouldn't even be sent, but if one still arrives
+            // it gets ignored
+            Announce if packet.header.result != ResultCode::Success => (),
+            Announce => self.server_lost_state()?,
+            Map(MapResponsePayload {
+                external_addr: addr,
+                external_port: port,
+                ..
+            })
+            | Peer(PeerResponsePayload {
+                external_addr: addr,
+                external_port: port,
+                ..
+            }) => {
+                if let Some(idx) = self.mappings.iter().position(|v| v.request == packet) {
+                    let mapping = &mut self.mappings[idx];
+
+                    if packet.header.result != ResultCode::Success {
+                        mapping.delay.ignore();
+                        mapping.set_state(State::Error(packet.header.result));
+                        return Ok(());
+                    }
+
+                    let m_lifetime = mapping.request.header.lifetime;
+                    let p_lifetime = packet.header.lifetime;
+
+                    mapping.delay.ignore();
+                    // It's not granted that the requested lifetime matches the
+                    // assigned one
+                    if m_lifetime != p_lifetime {
+                        mapping.request.header.lifetime = p_lifetime;
+                        mapping.buffer = None;
+                    }
+                    // After a success response the mapping is running
+                    mapping.set_state(State::Running);
+
+                    let alert = Alert::Assigned(addr.into(), port, p_lifetime);
+                    mapping.alert(alert);
+
+                    let wait = match mapping.kind {
+                        RequestType::Once | RequestType::Repeat(0) => {
+                            Duration::from_secs(m_lifetime as u64)
+                        }
+                        RequestType::KeepAlive | RequestType::Repeat(_) => {
+                            Self::jitter_lifetime(&mut self.rng, m_lifetime, 0).unwrap_or_default()
+                        }
+                    };
+                    // Set the delay for when it expires
+                    mapping.delay = Delay::by(wait, idx, self.event_source.clone())
+                }
+            }
+        };
+        Ok(())
     }
 
     fn listen(socket: UdpSocket, to_client: mpsc::Sender<Event>) {
