@@ -80,13 +80,13 @@ use crate::types::{
     PeerResponsePayload, RequestPacket, RequestPayload, ResponsePacket, ResponsePayload,
     ResultCode, MAX_PACKET_SIZE,
 };
-use crate::{Handle, IpAddress, State};
+use crate::{Handle, InboundMap, IpAddress, OutboundMap, State};
 use rand::rngs::ThreadRng;
 use rand::Rng;
 use std::convert::TryFrom;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, UdpSocket};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
 // TODO: allow modifying those values
@@ -303,121 +303,9 @@ impl<Ip: IpAddress> Client<Ip> {
         loop {
             match self.event_receiver.recv()? {
                 // The handler request an inbound mapping
-                Event::InboundMap(map, kind, handle_id) => {
-                    // Get the index of this mapping
-                    let opt_idx = self.next_index();
-                    let idx = opt_idx.unwrap_or(self.mappings.len());
-
-                    // Count the number of options
-                    let mut cap = map.filters.len();
-                    if map.prefer_failure {
-                        cap += 1
-                    };
-                    if map.third_party.is_some() {
-                        cap += 1
-                    };
-
-                    // Insert all the options in one vector
-                    let mut options = Vec::with_capacity(cap);
-                    map.filters.into_iter().for_each(|f| {
-                        options.push(PacketOption::filter(
-                            // TODO: sposta questo all'interno
-                            f.prefix,
-                            f.remote_port,
-                            f.remote_addr.to_ipv6(),
-                        ))
-                    });
-                    if map.prefer_failure {
-                        options.push(PacketOption::prefer_failure())
-                    };
-                    if let Some(addr) = map.third_party {
-                        options.push(PacketOption::third_party(addr.to_ipv6()))
-                    }
-
-                    // Construct the request
-                    let request = RequestPacket::map(
-                        2,
-                        map.lifetime,
-                        self.addr.to_ipv6(),
-                        self.generate_nonce(),
-                        map.protocol,
-                        map.internal_port,
-                        map.external_port.unwrap_or(0),
-                        map.external_addr.unwrap_or(Ip::UNSPECIFIED).to_ipv6(),
-                        options,
-                    )
-                    .unwrap();
-
-                    let delay = Delay::by(
-                        Self::generate_irt(&mut self.rng),
-                        idx,
-                        self.event_source.clone(),
-                    );
-                    // Construct the mapping
-                    let mut mapping = MappingState::new(request, delay, kind);
-
-                    // Send the packet
-                    self.socket.send(mapping.bytes()).map_err(|err| {
-                        handle_id.send(None).ok();
-                        Error::from(err)
-                    })?;
-                    handle_id.send(Some(idx)).ok();
-
-                    // Insert the mapping in the list
-                    match opt_idx {
-                        Some(i) => self.mappings[i] = mapping,
-                        None => self.mappings.push(mapping),
-                    }
-                }
+                Event::InboundMap(m, k, h) => self.new_inbound(m, k, h)?,
                 // The handler request an outbound mapping
-                Event::OutboundMap(map, kind, handle_id) => {
-                    // Get the index of this mapping
-                    let opt_idx = self.next_index();
-                    let idx = opt_idx.unwrap_or(self.mappings.len());
-
-                    // Construct a vector with all the options
-                    let options = match map.third_party {
-                        Some(addr) => vec![PacketOption::third_party(addr.to_ipv6())],
-                        None => Vec::new(),
-                    };
-
-                    // Construct the request
-                    let request = RequestPacket::peer(
-                        2,
-                        map.lifetime,
-                        self.addr.to_ipv6(),
-                        self.generate_nonce(),
-                        map.protocol,
-                        map.internal_port,
-                        map.external_port.unwrap_or(0),
-                        map.external_addr.unwrap_or(Ip::UNSPECIFIED).to_ipv6(),
-                        map.remote_port,
-                        map.remote_addr.to_ipv6(),
-                        options,
-                    )
-                    .unwrap();
-
-                    let delay = Delay::by(
-                        Self::generate_irt(&mut self.rng),
-                        idx,
-                        self.event_source.clone(),
-                    );
-                    // Construct the mapping
-                    let mut mapping = MappingState::new(request, delay, kind);
-
-                    // Send the packet
-                    self.socket.send(mapping.bytes()).map_err(|err| {
-                        handle_id.send(None).ok();
-                        Error::from(err)
-                    })?;
-                    handle_id.send(Some(idx)).ok();
-
-                    // Insert the mapping in the vector
-                    match opt_idx {
-                        Some(i) => self.mappings[i] = mapping,
-                        None => self.mappings.push(mapping),
-                    }
-                }
+                Event::OutboundMap(m, k, h) => self.new_outbound(m, k, h)?,
                 // The relative handle of this mapping has been dropped or
                 // the handler requests to revoke a mapping
                 ev @ Event::Drop(_) | ev @ Event::Revoke(_) => {
@@ -466,6 +354,117 @@ impl<Ip: IpAddress> Client<Ip> {
         }
     }
 
+    fn new_mapping(
+        &mut self,
+        request: RequestPacket,
+        kind: RequestType,
+        handle_id: Sender<Option<usize>>,
+    ) -> Result<(), Error> {
+        // Get the index of this mapping
+        let idx = self.next_index().unwrap_or(self.mappings.len());
+
+        let delay = Delay::by(
+            Self::generate_irt(&mut self.rng),
+            idx,
+            self.event_source.clone(),
+        );
+        // Construct the mapping
+        let mut mapping = MappingState::new(request, delay, kind);
+
+        // Send the packet
+        self.socket.send(mapping.bytes()).map_err(|err| {
+            handle_id.send(None).ok();
+            Error::from(err)
+        })?;
+        handle_id.send(Some(idx)).ok();
+
+        // Insert the mapping in the list
+        self.mappings.insert(idx, mapping);
+        Ok(())
+    }
+
+    fn new_inbound(
+        &mut self,
+        map: InboundMap<Ip>,
+        kind: RequestType,
+        handle_id: Sender<Option<usize>>,
+    ) -> Result<(), Error> {
+        // Count the number of options
+        let mut cap = map.filters.len();
+        if map.prefer_failure {
+            cap += 1
+        };
+        if map.third_party.is_some() {
+            cap += 1
+        };
+
+        // Insert all the options in one vector
+        let mut options = Vec::with_capacity(cap);
+        map.filters.into_iter().for_each(|f| {
+            options.push(PacketOption::filter(
+                // TODO: sposta questo all'interno
+                f.prefix,
+                f.remote_port,
+                f.remote_addr.to_ipv6(),
+            ))
+        });
+        if map.prefer_failure {
+            options.push(PacketOption::prefer_failure())
+        };
+        if let Some(addr) = map.third_party {
+            options.push(PacketOption::third_party(addr.to_ipv6()))
+        }
+
+        // Construct the request
+        let request = RequestPacket::map(
+            2,
+            map.lifetime,
+            self.addr.to_ipv6(),
+            self.generate_nonce(),
+            map.protocol,
+            map.internal_port,
+            map.external_port.unwrap_or(0),
+            map.external_addr.unwrap_or(Ip::UNSPECIFIED).to_ipv6(),
+            options,
+        )
+        .unwrap();
+
+        self.new_mapping(request, kind, handle_id)?;
+        Ok(())
+    }
+
+    fn new_outbound(
+        &mut self,
+        map: OutboundMap<Ip>,
+        kind: RequestType,
+        handle_id: Sender<Option<usize>>,
+    ) -> Result<(), Error> {
+        // Construct a vector with all the options
+        let options = match map.third_party {
+            Some(addr) => vec![PacketOption::third_party(addr.to_ipv6())],
+            None => Vec::new(),
+        };
+
+        // Construct the request
+        let request = RequestPacket::peer(
+            2,
+            map.lifetime,
+            self.addr.to_ipv6(),
+            self.generate_nonce(),
+            map.protocol,
+            map.internal_port,
+            map.external_port.unwrap_or(0),
+            map.external_addr.unwrap_or(Ip::UNSPECIFIED).to_ipv6(),
+            map.remote_port,
+            map.remote_addr.to_ipv6(),
+            options,
+        )
+        .unwrap();
+
+        self.new_mapping(request, kind, handle_id)?;
+        Ok(())
+    }
+
     fn delay_expired(&mut self, id: usize, waited: Duration) -> Result<(), Error> {
         let mapping = &mut self.mappings[id];
         let update = match mapping.state {
@@ -511,6 +510,65 @@ impl<Ip: IpAddress> Client<Ip> {
         Ok(())
     }
 
+    fn mapping_response(
+        &mut self,
+        packet: ResponsePacket,
+        addr: Ipv6Addr,
+        port: u16,
+    ) -> Result<(), Error> {
+        if let Some(idx) = self.mappings.iter().position(|v| v.request == packet) {
+            let mapping = &mut self.mappings[idx];
+
+            match mapping.request.payload {
+                RequestPayload::Map(MapRequestPayload {
+                    ref mut external_addr,
+                    ref mut external_port,
+                    ..
+                })
+                | RequestPayload::Peer(PeerRequestPayload {
+                    ref mut external_addr,
+                    ref mut external_port,
+                    ..
+                }) => {
+                    *external_addr = addr;
+                    *external_port = port;
+                }
+                RequestPayload::Announce => unreachable!(),
+            }
+
+            if packet.header.result != ResultCode::Success {
+                mapping.delay.ignore();
+                mapping.state = State::Error(packet.header.result);
+                return Ok(());
+            }
+
+            let m_lifetime = mapping.request.header.lifetime;
+            let p_lifetime = packet.header.lifetime;
+
+            mapping.delay.ignore();
+            // It's not granted that the requested lifetime matches the
+            // assigned one
+            if m_lifetime != p_lifetime {
+                mapping.request.header.lifetime = p_lifetime;
+                mapping.clear();
+            }
+            // After a success response the mapping is running
+            mapping.state = State::Running;
+
+            let wait = match mapping.kind {
+                RequestType::Once | RequestType::Repeat(0) => {
+                    Duration::from_secs(m_lifetime as u64)
+                }
+                RequestType::KeepAlive | RequestType::Repeat(_) => {
+                    Self::jitter_lifetime(&mut self.rng, m_lifetime, 0).unwrap_or_default()
+                }
+            };
+            // Set the delay for when it expires
+            mapping.delay = Delay::by(wait, idx, self.event_source.clone())
+        }
+        Ok(())
+    }
+
     fn server_response(&mut self, packet: ResponsePacket, when: Instant) -> Result<(), Error> {
         use ResponsePayload::*;
 
@@ -532,58 +590,7 @@ impl<Ip: IpAddress> Client<Ip> {
                 external_addr: addr,
                 external_port: port,
                 ..
-            }) => {
-                if let Some(idx) = self.mappings.iter().position(|v| v.request == packet) {
-                    let mapping = &mut self.mappings[idx];
-
-                    match mapping.request.payload {
-                        RequestPayload::Map(MapRequestPayload {
-                            ref mut external_addr,
-                            ref mut external_port,
-                            ..
-                        })
-                        | RequestPayload::Peer(PeerRequestPayload {
-                            ref mut external_addr,
-                            ref mut external_port,
-                            ..
-                        }) => {
-                            *external_addr = addr;
-                            *external_port = port;
-                        }
-                        RequestPayload::Announce => unreachable!(),
-                    }
-
-                    if packet.header.result != ResultCode::Success {
-                        mapping.delay.ignore();
-                        mapping.state = State::Error(packet.header.result);
-                        return Ok(());
-                    }
-
-                    let m_lifetime = mapping.request.header.lifetime;
-                    let p_lifetime = packet.header.lifetime;
-
-                    mapping.delay.ignore();
-                    // It's not granted that the requested lifetime matches the
-                    // assigned one
-                    if m_lifetime != p_lifetime {
-                        mapping.request.header.lifetime = p_lifetime;
-                        mapping.clear();
-                    }
-                    // After a success response the mapping is running
-                    mapping.state = State::Running;
-
-                    let wait = match mapping.kind {
-                        RequestType::Once | RequestType::Repeat(0) => {
-                            Duration::from_secs(m_lifetime as u64)
-                        }
-                        RequestType::KeepAlive | RequestType::Repeat(_) => {
-                            Self::jitter_lifetime(&mut self.rng, m_lifetime, 0).unwrap_or_default()
-                        }
-                    };
-                    // Set the delay for when it expires
-                    mapping.delay = Delay::by(wait, idx, self.event_source.clone())
-                }
-            }
+            }) => self.mapping_response(packet, addr, port)?,
         };
         Ok(())
     }
