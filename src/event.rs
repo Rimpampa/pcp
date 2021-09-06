@@ -1,32 +1,24 @@
-use crate::types::ResponsePacket;
 use super::handle::{Error, RequestType};
 use super::map::{InboundMap, OutboundMap};
 use super::state::Alert;
+use crate::types::ResponsePacket;
+use crate::IpAddress;
+use std::net::IpAddr;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 /// Events that a PCP has to process
-pub enum Event {
+pub enum Event<Ip: IpAddress> {
     /// The server sent a respone packet
     ServerResponse(Instant, ResponsePacket),
     /// The handler requests an inbound mapping; the first Sender tells the map handler the id of
     /// the mapping
-    InboundMap(
-        InboundMap,
-        RequestType,
-        mpsc::Sender<Option<usize>>,
-        mpsc::Sender<Alert>,
-    ),
+    InboundMap(InboundMap<Ip>, RequestType, mpsc::Sender<Option<usize>>),
     /// The handler requests an outbound mapping; the first Sender tells the map handler the id of
     /// the mapping
-    OutboundMap(
-        OutboundMap,
-        RequestType,
-        mpsc::Sender<Option<usize>>,
-        mpsc::Sender<Alert>,
-    ),
+    OutboundMap(OutboundMap<Ip>, RequestType, mpsc::Sender<Option<usize>>),
     /// The handler of the mapping requests to revoke a mapping
     Revoke(usize),
     /// The handler of the mapping requests to renew a mapping for the specified lifetime
@@ -41,7 +33,7 @@ pub enum Event {
     ListenError(Error),
 }
 
-impl Event {
+impl<Ip: IpAddress> Event<Ip> {
     /// Function used for processing a `ResponsePacketSlice`
     pub fn packet_event(response: ResponsePacket) -> Self {
         Self::ServerResponse(Instant::now(), response)
@@ -56,7 +48,7 @@ pub struct Delay {
 impl Delay {
     /// Creates a `Delay` event that will be sent through the event `channel` after the secified
     /// amount of `time`
-    pub fn by(time: Duration, id: usize, channel: mpsc::Sender<Event>) -> Self {
+    pub fn by<Ip: IpAddress>(time: Duration, id: usize, channel: mpsc::Sender<Event<Ip>>) -> Self {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             thread::sleep(time);

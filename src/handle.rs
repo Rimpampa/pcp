@@ -1,6 +1,7 @@
 use super::event::Event;
 use super::map::{InboundMap, Map, OutboundMap};
 use crate::types::ParsingError;
+use crate::IpAddress;
 use std::sync::mpsc::{self, RecvError};
 use std::{fmt, io};
 
@@ -86,13 +87,16 @@ impl fmt::Display for Error {
         println!("The client reported an error: {}", err);
     }
 */
-pub struct Handle {
-    to_client: mpsc::Sender<Event>,
+pub struct Handle<Ip: IpAddress> {
+    to_client: mpsc::Sender<Event<Ip>>,
     from_client: mpsc::Receiver<Error>,
 }
 
-impl Handle {
-    pub(crate) fn new(to_client: mpsc::Sender<Event>, from_client: mpsc::Receiver<Error>) -> Self {
+impl<Ip: IpAddress> Handle<Ip> {
+    pub(crate) fn new(
+        to_client: mpsc::Sender<Event<Ip>>,
+        from_client: mpsc::Receiver<Error>,
+    ) -> Self {
         Handle {
             to_client,
             from_client,
@@ -135,37 +139,27 @@ pub trait Request<M: Map> {
     fn request(&self, map: M, kind: RequestType) -> Result<usize, Error>;
 }
 
-impl Request<InboundMap> for Handle {
-    fn request(&self, map: InboundMap, kind: RequestType) -> Result<usize, Error> {
+impl<Ip: IpAddress> Request<InboundMap<Ip>> for Handle<Ip> {
+    fn request(&self, map: InboundMap<Ip>, kind: RequestType) -> Result<usize, Error> {
         let (id_tx, id_rx) = mpsc::channel();
-        let (alert_tx, alert_rx) = mpsc::channel();
         self.to_client
-            .send(Event::InboundMap(map, kind, id_tx, alert_tx))
+            .send(Event::InboundMap(map, kind, id_tx))
             .unwrap();
-        if let Some(id) = id_rx.recv().unwrap() {
-            Ok(id)
-        } else {
-            Err(self.wait_err())
-        }
+        id_rx.recv().unwrap().ok_or_else(|| self.wait_err())
     }
 }
 
-impl Request<OutboundMap> for Handle {
-    fn request(&self, map: OutboundMap, kind: RequestType) -> Result<usize, Error> {
+impl<Ip: IpAddress> Request<OutboundMap<Ip>> for Handle<Ip> {
+    fn request(&self, map: OutboundMap<Ip>, kind: RequestType) -> Result<usize, Error> {
         let (id_tx, id_rx) = mpsc::channel();
-        let (alert_tx, alert_rx) = mpsc::channel();
         self.to_client
-            .send(Event::OutboundMap(map, kind, id_tx, alert_tx))
+            .send(Event::OutboundMap(map, kind, id_tx))
             .unwrap();
-        if let Some(id) = id_rx.recv().unwrap() {
-            Ok(id)
-        } else {
-            Err(self.wait_err())
-        }
+        id_rx.recv().unwrap().ok_or_else(|| self.wait_err())
     }
 }
 
-impl Drop for Handle {
+impl<Ip: IpAddress> Drop for Handle<Ip> {
     fn drop(&mut self) {
         self.to_client.send(Event::Shutdown).ok();
     }

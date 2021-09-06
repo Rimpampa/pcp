@@ -87,7 +87,7 @@ pub mod types;
 pub use client::Client;
 pub use handle::{Error, Handle, Request, RequestType};
 pub use map::{InboundMap, OutboundMap};
-pub use state::{Alert, MapHandle, State};
+pub use state::{Alert, /* MapHandle, */ State};
 pub use types::ProtocolNumber;
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -98,14 +98,24 @@ pub trait IpAddress: std::fmt::Debug + Send + Copy + Into<IpAddr> + 'static {
     const LENGTH: u8;
     /// Unspeficied address
     const UNSPECIFIED: Self;
+
+    fn to_ipv6(self) -> Ipv6Addr;
 }
 
 impl IpAddress for Ipv4Addr {
     const LENGTH: u8 = 32;
     const UNSPECIFIED: Self = Self::UNSPECIFIED;
+
+    fn to_ipv6(self) -> Ipv6Addr {
+        self.to_ipv6_mapped()
+    }
 }
 
 impl IpAddress for Ipv6Addr {
     const LENGTH: u8 = 128;
     const UNSPECIFIED: Self = Self::UNSPECIFIED;
+
+    fn to_ipv6(self) -> Ipv6Addr {
+        self
+    }
 }

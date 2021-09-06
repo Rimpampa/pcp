@@ -1,8 +1,6 @@
 use super::event::Delay;
 use super::handle::RequestType;
 use crate::types::{RequestPacket, ResultCode, MAX_PACKET_SIZE};
-use crate::Client;
-use std::io::ErrorKind;
 use std::net::IpAddr;
 
 /// A notitification sent when the state of a mapping changes
@@ -79,35 +77,35 @@ impl MappingState {
     }
 }
 
-/// An handle to a requested mapping
-pub struct MapHandle<'a> {
-    client: &'a Client,
-    id: usize,
-}
+// /// An handle to a requested mapping
+// pub struct MapHandle<'a> {
+//     client: &'a Client,
+//     id: usize,
+// }
 
-impl<'a> MapHandle<'a> {
-    // /// Returns the state of the mapping
-    // pub fn state(&self) -> State {
-    //     self.state.get()
-    // }
+// impl<'a> MapHandle<'a> {
+//     // /// Returns the state of the mapping
+//     // pub fn state(&self) -> State {
+//     //     self.state.get()
+//     // }
 
-    // /// Requests to renew the mapping for the specified lifetime
-    // pub fn renew(&self, lifetime: u32) {
-    //     self.to_client.send(Event::Renew(self.id, lifetime)).ok();
-    // }
+//     // /// Requests to renew the mapping for the specified lifetime
+//     // pub fn renew(&self, lifetime: u32) {
+//     //     self.to_client.send(Event::Renew(self.id, lifetime)).ok();
+//     // }
 
-    // /// Requests to revoke the mapping
-    // pub fn revoke(&self) {
-    //     self.to_client.send(Event::Revoke(self.id)).ok();
-    // }
+//     // /// Requests to revoke the mapping
+//     // pub fn revoke(&self) {
+//     //     self.to_client.send(Event::Revoke(self.id)).ok();
+//     // }
 
-    // /// Waits for an alert to arrive
-    // pub fn wait_alert(&self) -> Result<Alert, RecvError> {
-    //     self.from_client.recv()
-    // }
+//     // /// Waits for an alert to arrive
+//     // pub fn wait_alert(&self) -> Result<Alert, RecvError> {
+//     //     self.from_client.recv()
+//     // }
 
-    // /// Returns the first alert received if there is one
-    // pub fn poll_alert(&self) -> Option<Alert> {
-    //     self.from_client.try_recv().ok()
-    // }
-}
+//     // /// Returns the first alert received if there is one
+//     // pub fn poll_alert(&self) -> Option<Alert> {
+//     //     self.from_client.try_recv().ok()
+//     // }
+// }
