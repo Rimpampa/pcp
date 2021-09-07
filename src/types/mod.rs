@@ -46,6 +46,9 @@ pub use parsing_error::ParsingError;
 pub use protocols::ProtocolNumber;
 pub use result_code::ResultCode;
 
+pub const UNICAST_PORT: u16 = 5351;
+pub const MULTICAST_PORT: u16 = 5350;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Epoch {
     /// The actual value

@@ -78,7 +78,7 @@ use crate::state::MappingState;
 use crate::types::{
     Epoch, MapRequestPayload, MapResponsePayload, PacketOption, PeerRequestPayload,
     PeerResponsePayload, RequestPacket, RequestPayload, ResponsePacket, ResponsePayload,
-    ResultCode, MAX_PACKET_SIZE,
+    ResultCode, MAX_PACKET_SIZE, MULTICAST_PORT, UNICAST_PORT,
 };
 use crate::{Handle, InboundMap, IpAddress, OutboundMap, State};
 use rand::rngs::ThreadRng;
@@ -174,9 +174,12 @@ impl<Ip: IpAddress> Client<Ip> {
 
     /// Returns the next available index to which a new mapping can be stored; if the vector is
     /// full it'll return None, if there is an empty space it'll return its index
-    fn next_index(&self) -> Option<usize> {
+    fn next_index(&self) -> usize {
         // A dropped mapping has no reason to exist anymore, thus it's index can be reused
-        self.mappings.iter().position(|m| m.state == State::Dropped)
+        self.mappings
+            .iter()
+            .position(|m| m.state == State::Dropped)
+            .unwrap_or(self.mappings.len())
     }
 
     /// Generate the noce of the mapping randomly
@@ -206,7 +209,7 @@ impl<Ip: IpAddress> Client<Ip> {
         // Resend the data for each mapping
         self.mappings
             .iter_mut()
-            .try_for_each(|map| -> io::Result<()> { sock.send(map.bytes()).map(|_| ()) })?;
+            .try_for_each(|map| sock.send(map.bytes()).map(|_| ()))?;
 
         let rng = &mut self.rng;
         let event_source = &self.event_source;
@@ -286,15 +289,13 @@ impl<Ip: IpAddress> Client<Ip> {
             match self.run() {
                 // Ok(()) is returned only when the shoutdown event is received
                 Ok(()) => break,
-                Err(error) => match error {
-                    err @ Error::Parsing(_) => {
-                        self.to_handle.send(err).ok();
-                    }
-                    err @ Error::Socket(_) | err @ Error::Channel(_) => {
-                        self.to_handle.send(err).ok();
-                        break;
-                    }
-                },
+                Err(err @ Error::Parsing(_)) => {
+                    self.to_handle.send(err).ok();
+                }
+                Err(err @ Error::Socket(_)) | Err(err @ Error::Channel(_)) => {
+                    self.to_handle.send(err).ok();
+                    break;
+                }
             }
         }
     }
@@ -309,7 +310,6 @@ impl<Ip: IpAddress> Client<Ip> {
                 // The relative handle of this mapping has been dropped or
                 // the handler requests to revoke a mapping
                 ev @ Event::Drop(_) | ev @ Event::Revoke(_) => {
-                    // TODO: accertarsi che sia davvero avvenuto
                     let mapping = &mut self.mappings[match ev {
                         Event::Revoke(id) | Event::Drop(id) => id,
                         _ => unreachable!(),
@@ -361,7 +361,7 @@ impl<Ip: IpAddress> Client<Ip> {
         handle_id: Sender<Option<usize>>,
     ) -> Result<(), Error> {
         // Get the index of this mapping
-        let idx = self.next_index().unwrap_or(self.mappings.len());
+        let idx = self.next_index();
 
         let delay = Delay::by(
             Self::generate_irt(&mut self.rng),
@@ -372,11 +372,13 @@ impl<Ip: IpAddress> Client<Ip> {
         let mut mapping = MappingState::new(request, delay, kind);
 
         // Send the packet
-        self.socket.send(mapping.bytes()).map_err(|err| {
-            handle_id.send(None).ok();
-            Error::from(err)
-        })?;
-        handle_id.send(Some(idx)).ok();
+        match self.socket.send(mapping.bytes()) {
+            Ok(_) => handle_id.send(Some(idx)).unwrap_or(()),
+            Err(err) => {
+                let _ = handle_id.send(None);
+                return Err(err.into());
+            }
+        }
 
         // Insert the mapping in the list
         self.mappings.insert(idx, mapping);
@@ -390,19 +392,13 @@ impl<Ip: IpAddress> Client<Ip> {
         handle_id: Sender<Option<usize>>,
     ) -> Result<(), Error> {
         // Count the number of options
-        let mut cap = map.filters.len();
-        if map.prefer_failure {
-            cap += 1
-        };
-        if map.third_party.is_some() {
-            cap += 1
-        };
+        let cap =
+            map.filters.len() + map.prefer_failure as usize + map.third_party.is_some() as usize;
 
         // Insert all the options in one vector
         let mut options = Vec::with_capacity(cap);
         map.filters.into_iter().for_each(|f| {
             options.push(PacketOption::filter(
-                // TODO: sposta questo all'interno
                 f.prefix,
                 f.remote_port,
                 f.remote_addr.to_ipv6(),
@@ -410,11 +406,10 @@ impl<Ip: IpAddress> Client<Ip> {
         });
         if map.prefer_failure {
             options.push(PacketOption::prefer_failure())
-        };
+        }
         if let Some(addr) = map.third_party {
             options.push(PacketOption::third_party(addr.to_ipv6()))
         }
-
         // Construct the request
         let request = RequestPacket::map(
             2,
@@ -615,7 +610,9 @@ impl Client<Ipv4Addr> {
 
     /// Starts the PCP client and returns it's `Handle` which is used to request mappings.
     pub fn start(client: Ipv4Addr, server: Ipv4Addr) -> io::Result<Handle<Ipv4Addr>> {
-        let server_sockaddr = SocketAddrV4::new(server, 5351);
+        const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 1);
+
+        let server_sockaddr = SocketAddrV4::new(server, UNICAST_PORT);
 
         let client_socket = UdpSocket::bind(SocketAddrV4::new(client, 0))?;
         client_socket.connect(server_sockaddr)?;
@@ -625,8 +622,8 @@ impl Client<Ipv4Addr> {
         let (to_handle, from_client) = mpsc::channel();
         let tx = Client::open(client_socket, client, to_handle);
 
-        let announce_socket = UdpSocket::bind(SocketAddrV4::new(client, 5350))?;
-        announce_socket.join_multicast_v4(&Ipv4Addr::new(224, 0, 0, 1), &client)?;
+        let announce_socket = UdpSocket::bind(SocketAddrV4::new(MULTICAST_ADDR, MULTICAST_PORT))?;
+        announce_socket.join_multicast_v4(&MULTICAST_ADDR, &client)?;
         announce_socket.connect(server_sockaddr)?;
 
         Self::listen(announce_socket, tx.clone());
@@ -639,7 +636,9 @@ impl Client<Ipv4Addr> {
 impl Client<Ipv6Addr> {
     /// Starts the PCP client and returns it's `Handle` which is used to request mappings.
     pub fn start(client: Ipv6Addr, server: Ipv6Addr) -> io::Result<Handle<Ipv6Addr>> {
-        let server_sockaddr = SocketAddrV6::new(server, 5351, 0, 0);
+        const MULTICAST_ADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
+
+        let server_sockaddr = SocketAddrV6::new(server, UNICAST_PORT, 0, 0);
 
         let client_socket = UdpSocket::bind(SocketAddrV6::new(client, 0, 0, 0))?;
         client_socket.connect(server_sockaddr)?;
@@ -649,8 +648,9 @@ impl Client<Ipv6Addr> {
         let (to_handle, from_client) = mpsc::channel();
         let tx = Client::open(client_socket, client, to_handle);
 
-        let announce_socket = UdpSocket::bind(SocketAddrV6::new(client, 5350, 0, 0))?;
-        announce_socket.join_multicast_v6(&Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1), 0)?;
+        let announce_socket =
+            UdpSocket::bind(SocketAddrV6::new(MULTICAST_ADDR, MULTICAST_PORT, 0, 0))?;
+        announce_socket.join_multicast_v6(&MULTICAST_ADDR, 0)?;
         announce_socket.connect(server_sockaddr)?;
 
         Self::listen(announce_socket, tx.clone());
