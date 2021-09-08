@@ -1,9 +1,7 @@
 use super::handle::{Error, RequestType};
 use super::map::{InboundMap, OutboundMap};
-use super::state::Alert;
 use crate::types::ResponsePacket;
 use crate::IpAddress;
-use std::net::IpAddr;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};

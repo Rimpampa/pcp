@@ -119,27 +119,24 @@ impl<Ip: IpAddress> Handle<Ip> {
     }
 }
 
-/// The number of times a request has to be submitted:
-///
-/// - `Once`: send only one time
-/// - `Repeat(n)`: repeats for `n` times
-/// - `KeepAlive`: continues to resend until it gets stopped manually
+/// The number of times a request has to be submitted
 #[derive(Debug, PartialEq)]
 pub enum RequestType {
-    Once,
+    /// Repeats for N times after the first submit (thus a value of 0 means only once)
     Repeat(usize),
+    /// Continues to resend until it gets stopped manually
     KeepAlive,
 }
 
 // TODO: modify this trait to be implemented on the Requestable items instead that on the Handle
 
-/// Allows an `Handler` to request mappings via a `Client`
-pub trait Request<M: Map> {
-    /// Send the request to the `Client` that will then send it to the server
+/// Used to specify that the type implementing this trait can request PCP mappings
+pub trait Requester<M: Map> {
+    /// Requests the mapping and returns its identifier
     fn request(&self, map: M, kind: RequestType) -> Result<usize, Error>;
 }
 
-impl<Ip: IpAddress> Request<InboundMap<Ip>> for Handle<Ip> {
+impl<Ip: IpAddress> Requester<InboundMap<Ip>> for Handle<Ip> {
     fn request(&self, map: InboundMap<Ip>, kind: RequestType) -> Result<usize, Error> {
         let (id_tx, id_rx) = mpsc::channel();
         self.to_client
@@ -149,7 +146,7 @@ impl<Ip: IpAddress> Request<InboundMap<Ip>> for Handle<Ip> {
     }
 }
 
-impl<Ip: IpAddress> Request<OutboundMap<Ip>> for Handle<Ip> {
+impl<Ip: IpAddress> Requester<OutboundMap<Ip>> for Handle<Ip> {
     fn request(&self, map: OutboundMap<Ip>, kind: RequestType) -> Result<usize, Error> {
         let (id_tx, id_rx) = mpsc::channel();
         self.to_client

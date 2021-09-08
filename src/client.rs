@@ -91,12 +91,61 @@ use std::time::{Duration, Instant};
 
 // TODO: allow modifying those values
 
-/// Initial Retrasmission Time
-const IRT: f32 = 3.0;
-/// Maximum Restrasmission Time
-const MRT: f32 = 1024.0;
-/// Maximum Retrasmission Count (0 = infinite)
-const MRC: usize = 0;
+mod timeout {
+    use std::time::Duration;
+
+    /// Initial Retrasmission Time
+    pub const IRT: f32 = 3.0;
+    /// Maximum Restrasmission Time
+    pub const MRT: f32 = 1024.0;
+    /// Maximum Retrasmission Count (0 = infinite)
+    pub const MRC: usize = 0;
+    ///
+    pub const RAND: f32 = 0.2;
+    ///
+    pub const REASONABLE_LIFETIME: Duration = Duration::from_secs(60 * 60 * 24);
+
+    /// Generates the 1 + RAND factor used in the IRT and RT functions
+    pub fn rand<R: rand::Rng>(mut rng: R) -> f32 {
+        const BASE: f32 = 1.0 - RAND * 0.5;
+        BASE + rng.gen::<f32>() * RAND
+    }
+
+    /// Generates the Initial Retrasmission Time (IRT) using the following formula:
+    ///
+    /// RT = (1 + RAND) * IRT
+    pub fn irt<R: rand::Rng>(rng: R) -> Duration {
+        Duration::from_secs_f32(rand(rng) * IRT)
+    }
+
+    /// Generates the Retrasmission Time (RT) using the following formula:
+    ///
+    /// RT = (1 + RAND) * MIN (2 * RTprev, MRT)
+    pub fn rt<R: rand::Rng>(rng: R, rt_prev: Duration) -> Duration {
+        Duration::from_secs_f32(rand(rng) * MRT.min(2.0 * rt_prev.as_secs_f32()))
+    }
+
+    /// Computes the duration needed to wait for the retrasmission of a keepalive request
+    pub fn jitter<R: rand::Rng>(mut rng: R, lifetime: u32, times: usize) -> Option<Duration> {
+        let ftime = lifetime as f32
+            * if times == 0 {
+                // (1/2)~(5/8) --> 1/2 + 0~1 * 1/8
+                0.5 + rng.gen::<f32>() * 0.125
+            } else {
+                // Not sure of this formula, it's not explicitly written in the specification
+                // n = number of attempts (subsequent to the first)
+                // (2^(n+1)-1)/2^(n+1) + 0~1 * 1/(2^(n+3))
+                let denom = 4 << times;
+                let base = (denom - 1) as f32 / denom as f32;
+                base + rng.gen::<f32>() / (8 << times) as f32
+            };
+        if ftime < 4.0 {
+            None
+        } else {
+            Some(Duration::from_secs_f32(ftime))
+        }
+    }
+}
 
 /// A daemon thread that implements the PCP protocol (client-side).
 ///
@@ -211,76 +260,32 @@ impl<Ip: IpAddress> Client<Ip> {
             .iter_mut()
             .try_for_each(|map| sock.send(map.bytes()).map(|_| ()))?;
 
-        let rng = &mut self.rng;
         let event_source = &self.event_source;
         // Reset the state and start the new timer for each mapping
-        self.mappings.iter_mut().enumerate().for_each(|(id, map)| {
-            map.state = State::Starting(0);
-            map.delay = Delay::by(Self::generate_irt(rng), id, event_source.clone());
-        });
+        let mappings = self.mappings.iter_mut().enumerate();
+        for (id, map) in mappings {
+            use State::*;
+            if matches!(map.state, Error(_) | Expired | Revoked | Dropped) {
+                continue;
+            }
+            map.state = Starting(0);
+            map.delay = Delay::by(timeout::irt(&mut self.rng), id, event_source.clone());
+        }
         Ok(())
     }
 
-    fn update_mapping(
-        rng: &mut ThreadRng,
-        map: &mut MappingState,
-        id: usize,
-        times: usize,
-        sock: &UdpSocket,
-        tx: mpsc::Sender<Event<Ip>>,
-    ) -> Result<(), Error> {
-        match Self::jitter_lifetime(rng, map.request.header.lifetime, times) {
+    fn update_mapping(&mut self, id: usize, times: usize) -> Result<(), Error> {
+        let map = &mut self.mappings[id];
+        match timeout::jitter(&mut self.rng, map.request.header.lifetime, times) {
             Some(delay) => {
                 // Resend the request
-                sock.send(map.bytes())?;
+                self.socket.send(map.bytes())?;
                 map.state = State::Updating(times, map.request.header.lifetime);
-                map.delay = Delay::by(delay, id, tx);
+                map.delay = Delay::by(delay, id, self.event_source.clone());
             }
             None => map.state = State::Expired,
         }
         Ok(())
-    }
-
-    /// Generates the 1 + RAND factor used in the IRT and RT functions
-    fn one_plus_rand(rng: &mut ThreadRng) -> f32 {
-        // RAND sould be a value between -0.1 and 0.1, but by subtracting it from one the range
-        // becomes from 0.9 to 1.1, thus I can generate a number between 0 as 0.2 and add it to 0.9
-        0.9 + rng.gen::<f32>() * 0.2
-    }
-
-    /// Generates the Initial Retrasmission Time (IRT) using the following formula:
-    ///
-    /// RT = (1 + RAND) * IRT
-    fn generate_irt(rng: &mut ThreadRng) -> Duration {
-        Duration::from_secs_f32(Self::one_plus_rand(rng) * IRT)
-    }
-
-    /// Generates the Retrasmission Time (RT) using the following formula:
-    ///
-    /// RT = (1 + RAND) * MIN (2 * RTprev, MRT)
-    fn generate_rt(rng: &mut ThreadRng, rt_prev: Duration) -> Duration {
-        Duration::from_secs_f32(Self::one_plus_rand(rng) * MRT.min(2.0 * rt_prev.as_secs_f32()))
-    }
-
-    /// Computes the duration needed to wait for the retrasmission of a keepalive request
-    fn jitter_lifetime(rng: &mut ThreadRng, lifetime: u32, times: usize) -> Option<Duration> {
-        let ftime = lifetime as f32
-            * if times == 0 {
-                // (1/2)~(5/8) --> 1/2 + 0~1 * 1/8
-                0.5 + rng.gen::<f32>() * 0.125
-            } else {
-                // Not sure of this formula, it's not explicitly written in the specification
-                // n = number of attempts (subsequent to the first)
-                // (2^(n+1)-1)/2^(n+1) + 0~1 * 1/(2^(n+3))
-                let denom = 4 << times;
-                let base = (denom - 1) as f32 / denom as f32;
-                base + rng.gen::<f32>() / (8 << times) as f32
-            };
-        if ftime < 4.0 {
-            None
-        } else {
-            Some(Duration::from_secs_f32(ftime))
-        }
     }
 
     /// Function used as a catch for the errors that might be generated while running the client
@@ -339,11 +344,8 @@ impl<Ip: IpAddress> Client<Ip> {
                     self.socket.send(mapping.bytes())?;
 
                     mapping.state = State::Starting(0);
-                    mapping.delay = Delay::by(
-                        Self::generate_irt(&mut self.rng),
-                        id,
-                        self.event_source.clone(),
-                    );
+                    mapping.delay =
+                        Delay::by(timeout::irt(&mut self.rng), id, self.event_source.clone());
                 }
                 // A delay has ended
                 Event::Delay(id, waited) => self.delay_expired(id, waited)?,
@@ -363,11 +365,7 @@ impl<Ip: IpAddress> Client<Ip> {
         // Get the index of this mapping
         let idx = self.next_index();
 
-        let delay = Delay::by(
-            Self::generate_irt(&mut self.rng),
-            idx,
-            self.event_source.clone(),
-        );
+        let delay = Delay::by(timeout::irt(&mut self.rng), idx, self.event_source.clone());
         // Construct the mapping
         let mut mapping = MappingState::new(request, delay, kind);
 
@@ -462,7 +460,7 @@ impl<Ip: IpAddress> Client<Ip> {
 
     fn delay_expired(&mut self, id: usize, waited: Duration) -> Result<(), Error> {
         let mapping = &mut self.mappings[id];
-        let update = match mapping.state {
+        match mapping.state {
             // The mapping was in a starting state, this means that the packet was
             // already been sent n times but the server, still, didn't respond, thus
             // the client will try to send it again
@@ -471,36 +469,22 @@ impl<Ip: IpAddress> Client<Ip> {
                 self.socket.send(mapping.bytes())?;
                 // Restart the timer
                 mapping.delay = Delay::by(
-                    Self::generate_rt(&mut self.rng, waited),
+                    timeout::rt(&mut self.rng, waited),
                     id,
                     self.event_source.clone(),
                 );
-                None
             }
             // If it's running it means that the lifetime has ended
             State::Running => match mapping.kind {
-                RequestType::Once | RequestType::Repeat(0) => {
-                    mapping.state = State::Expired;
-                    None
-                }
+                RequestType::Repeat(0) => mapping.state = State::Expired,
                 RequestType::Repeat(n) => {
                     mapping.kind = RequestType::Repeat(n - 1);
-                    Some(0)
+                    self.update_mapping(id, 0)?;
                 }
-                RequestType::KeepAlive => Some(0),
+                RequestType::KeepAlive => self.update_mapping(id, 0)?,
             },
-            State::Updating(n, _) => Some(n + 1),
-            _ => None,
-        };
-        if let Some(times) = update {
-            Self::update_mapping(
-                &mut self.rng,
-                mapping,
-                id,
-                times,
-                &self.socket,
-                self.event_source.clone(),
-            )?;
+            State::Updating(n, _) => self.update_mapping(id, n + 1)?,
+            _ => (),
         }
         Ok(())
     }
@@ -551,11 +535,9 @@ impl<Ip: IpAddress> Client<Ip> {
             mapping.state = State::Running;
 
             let wait = match mapping.kind {
-                RequestType::Once | RequestType::Repeat(0) => {
-                    Duration::from_secs(m_lifetime as u64)
-                }
+                RequestType::Repeat(0) => Duration::from_secs(m_lifetime as u64),
                 RequestType::KeepAlive | RequestType::Repeat(_) => {
-                    Self::jitter_lifetime(&mut self.rng, m_lifetime, 0).unwrap_or_default()
+                    timeout::jitter(&mut self.rng, m_lifetime, 0).unwrap_or_default()
                 }
             };
             // Set the delay for when it expires
