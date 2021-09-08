@@ -85,7 +85,7 @@ use rand::rngs::ThreadRng;
 use rand::Rng;
 use std::convert::TryFrom;
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, UdpSocket};
+use std::net::{Ipv6Addr, UdpSocket};
 use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
@@ -576,63 +576,28 @@ impl<Ip: IpAddress> Client<Ip> {
         let mut buf = [0; MAX_PACKET_SIZE];
         std::thread::spawn(move || loop {
             if let Ok(bytes) = socket.recv(&mut buf) {
-                if bytes < 1011 {
-                    match ResponsePacket::try_from(&buf[..bytes]) {
-                        Ok(packet) => to_client.send(Event::packet_event(packet)).ok(),
-                        Err(error) => to_client.send(Event::ListenError(error.into())).ok(),
-                    };
-                }
+                match ResponsePacket::try_from(&buf[..bytes]) {
+                    Ok(packet) => to_client.send(Event::packet_event(packet)).ok(),
+                    Err(error) => to_client.send(Event::ListenError(error.into())).ok(),
+                };
             }
         });
     }
-}
 
-impl Client<Ipv4Addr> {
-    // TODO: check if multicast packets are received
+    /// Starts the PCP client and returns it's [`Handle`] which is used to request mappings.
+    pub fn start(client: Ip, server: Ip) -> io::Result<Handle<Ip>> {
+        let server_sockaddr = server.to_sockaddr(UNICAST_PORT);
 
-    /// Starts the PCP client and returns it's `Handle` which is used to request mappings.
-    pub fn start(client: Ipv4Addr, server: Ipv4Addr) -> io::Result<Handle<Ipv4Addr>> {
-        const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 1);
-
-        let server_sockaddr = SocketAddrV4::new(server, UNICAST_PORT);
-
-        let client_socket = UdpSocket::bind(SocketAddrV4::new(client, 0))?;
-        client_socket.connect(server_sockaddr)?;
+        let client_socket = UdpSocket::bind(client.to_sockaddr(0))?;
+        client_socket.connect(&server_sockaddr)?;
         // One part will be used only for sending, the other only for receiving
         let server_socket = client_socket.try_clone()?;
 
         let (to_handle, from_client) = mpsc::channel();
         let tx = Client::open(client_socket, client, to_handle);
 
-        let announce_socket = UdpSocket::bind(SocketAddrV4::new(MULTICAST_ADDR, MULTICAST_PORT))?;
-        announce_socket.join_multicast_v4(&MULTICAST_ADDR, &client)?;
-        announce_socket.connect(server_sockaddr)?;
-
-        Self::listen(announce_socket, tx.clone());
-        Self::listen(server_socket, tx.clone());
-
-        Ok(Handle::new(tx, from_client))
-    }
-}
-
-impl Client<Ipv6Addr> {
-    /// Starts the PCP client and returns it's `Handle` which is used to request mappings.
-    pub fn start(client: Ipv6Addr, server: Ipv6Addr) -> io::Result<Handle<Ipv6Addr>> {
-        const MULTICAST_ADDR: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
-
-        let server_sockaddr = SocketAddrV6::new(server, UNICAST_PORT, 0, 0);
-
-        let client_socket = UdpSocket::bind(SocketAddrV6::new(client, 0, 0, 0))?;
-        client_socket.connect(server_sockaddr)?;
-        // One part will be used only for sending, the other only for receiving
-        let server_socket = client_socket.try_clone()?;
-
-        let (to_handle, from_client) = mpsc::channel();
-        let tx = Client::open(client_socket, client, to_handle);
-
-        let announce_socket =
-            UdpSocket::bind(SocketAddrV6::new(MULTICAST_ADDR, MULTICAST_PORT, 0, 0))?;
-        announce_socket.join_multicast_v6(&MULTICAST_ADDR, 0)?;
+        let announce_socket = UdpSocket::bind(Ip::ALL_NODES.to_sockaddr(MULTICAST_PORT))?;
+        Ip::ALL_NODES.join_muliticast_group(&announce_socket)?;
         announce_socket.connect(server_sockaddr)?;
 
         Self::listen(announce_socket, tx.clone());
