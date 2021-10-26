@@ -8,9 +8,7 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 /// Events that a PCP has to process
-pub enum Event<Ip: IpAddress> {
-    /// The server sent a respone packet
-    ServerResponse(Instant, ResponsePacket),
+pub enum ServerEvent<Ip: IpAddress> {
     /// The handler requests an inbound mapping; the first Sender tells the map handler the id of
     /// the mapping
     InboundMap(InboundMap<Ip>, RequestType, mpsc::Sender<Option<usize>>),
@@ -23,19 +21,14 @@ pub enum Event<Ip: IpAddress> {
     Renew(usize, u32),
     /// The handler of the mapping has been dropped
     Drop(usize),
-    /// A delay has ended
-    Delay(usize, Duration),
     /// The handler of the client has dropped or has requested to shutdown the service
     Shutdown,
+    /// The server sent a respone packet
+    ServerResponse(Instant, ResponsePacket),
+    /// A delay has ended
+    Delay(usize, Duration),
     /// The listening thread generated an error
     ListenError(Error),
-}
-
-impl<Ip: IpAddress> Event<Ip> {
-    /// Function used for processing a `ResponsePacketSlice`
-    pub fn packet_event(response: ResponsePacket) -> Self {
-        Self::ServerResponse(Instant::now(), response)
-    }
 }
 
 /// An handle to a waiting thread: one the thread wait ends an event is sent
@@ -46,12 +39,16 @@ pub struct Delay {
 impl Delay {
     /// Creates a `Delay` event that will be sent through the event `channel` after the secified
     /// amount of `time`
-    pub fn by<Ip: IpAddress>(time: Duration, id: usize, channel: mpsc::Sender<Event<Ip>>) -> Self {
+    pub fn by<Ip: IpAddress>(
+        time: Duration,
+        id: usize,
+        channel: mpsc::Sender<ServerEvent<Ip>>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             thread::sleep(time);
             if rx.try_recv().is_err() {
-                channel.send(Event::Delay(id, time)).ok();
+                channel.send(ServerEvent::Delay(id, time)).ok();
             }
         });
         Self { signal: Some(tx) }

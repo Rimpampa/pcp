@@ -1,4 +1,4 @@
-use super::event::Event;
+use super::event::ServerEvent;
 use super::map::{InboundMap, Map, OutboundMap};
 use crate::types::ParsingError;
 use crate::IpAddress;
@@ -59,42 +59,41 @@ impl fmt::Display for Error {
 /// ### Submitting a request
 ///
 /// Request an inbound mapping to the port 120 TCP:
-/**
-
-    // Start the PCP client service
-    let handle = Client::<Ipv4Addr>::start(client, server).unwrap();
-
-    // Allows for any host to connect on the TCP port number 120
-    // (see map module)
-    let map = InboundMap::new(6000, 120).protocol(ProtocolNumber::Tcp);
-
-    // Submit the request to the client, it will live one time
-    let map_handle = handle.request(map, RequestType::Once).unwrap();
-
-*/
+/// ```
+/// // Start the PCP client service
+/// let handle = Client::<Ipv4Addr>::start(client, server).unwrap();
+///
+/// // Allows for any host to connect on the TCP port number 120
+/// // (see map module)
+/// let map = InboundMap::new(6000, 120).protocol(ProtocolNumber::Tcp);
+///
+/// // Submit the request to the client, it will live one time
+/// let map_handle = handle.request(map, RequestType::Once).unwrap();
+/// ```
+///
 /// ### Querying the state
 ///
 /// Check if the `Client` reported any errors:
-/**
-
-    // Start the PCP client service
-    let handle = Client::<Ipv4Addr>::start(client, server).unwrap();
-
-    // Do stuff...
-
-    // Non blocking, use wait_err to block until a new error arrives
-    if let Some(err) = handle.poll_err() {
-        println!("The client reported an error: {}", err);
-    }
-*/
+///
+/// ```
+/// // Start the PCP client service
+/// let handle = Client::<Ipv4Addr>::start(client, server).unwrap();
+///
+/// // Do stuff...
+///
+/// // Non blocking, use wait_err to block until a new error arrives
+/// if let Some(err) = handle.poll_err() {
+/// println!("The client reported an error: {}", err);
+/// }
+/// ```
 pub struct Handle<Ip: IpAddress> {
-    to_client: mpsc::Sender<Event<Ip>>,
+    to_client: mpsc::Sender<ServerEvent<Ip>>,
     from_client: mpsc::Receiver<Error>,
 }
 
 impl<Ip: IpAddress> Handle<Ip> {
     pub(crate) fn new(
-        to_client: mpsc::Sender<Event<Ip>>,
+        to_client: mpsc::Sender<ServerEvent<Ip>>,
         from_client: mpsc::Receiver<Error>,
     ) -> Self {
         Handle {
@@ -115,7 +114,7 @@ impl<Ip: IpAddress> Handle<Ip> {
 
     /// Signals the `Client` to end execution
     pub fn shutdown(self) {
-        self.to_client.send(Event::Shutdown).ok();
+        self.to_client.send(ServerEvent::Shutdown).ok();
     }
 }
 
@@ -140,7 +139,7 @@ impl<Ip: IpAddress> Requester<InboundMap<Ip>> for Handle<Ip> {
     fn request(&self, map: InboundMap<Ip>, kind: RequestType) -> Result<usize, Error> {
         let (id_tx, id_rx) = mpsc::channel();
         self.to_client
-            .send(Event::InboundMap(map, kind, id_tx))
+            .send(ServerEvent::InboundMap(map, kind, id_tx))
             .unwrap();
         id_rx.recv().unwrap().ok_or_else(|| self.wait_err())
     }
@@ -150,7 +149,7 @@ impl<Ip: IpAddress> Requester<OutboundMap<Ip>> for Handle<Ip> {
     fn request(&self, map: OutboundMap<Ip>, kind: RequestType) -> Result<usize, Error> {
         let (id_tx, id_rx) = mpsc::channel();
         self.to_client
-            .send(Event::OutboundMap(map, kind, id_tx))
+            .send(ServerEvent::OutboundMap(map, kind, id_tx))
             .unwrap();
         id_rx.recv().unwrap().ok_or_else(|| self.wait_err())
     }
@@ -158,6 +157,6 @@ impl<Ip: IpAddress> Requester<OutboundMap<Ip>> for Handle<Ip> {
 
 impl<Ip: IpAddress> Drop for Handle<Ip> {
     fn drop(&mut self) {
-        self.to_client.send(Event::Shutdown).ok();
+        self.to_client.send(ServerEvent::Shutdown).ok();
     }
 }

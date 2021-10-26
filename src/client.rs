@@ -72,7 +72,7 @@
 //! The recovery procedure is actuated, also, when an _unsolicited announce response_
 //! arrives, which means that the server had some problems and lost it's state.
 
-use super::event::{Delay, Event};
+use super::event::{Delay, ServerEvent};
 use super::handle::{Error, RequestType};
 use crate::state::MappingState;
 use crate::types::{
@@ -83,7 +83,6 @@ use crate::types::{
 use crate::{Handle, InboundMap, IpAddress, OutboundMap, State};
 use rand::rngs::ThreadRng;
 use rand::Rng;
-use std::convert::TryFrom;
 use std::io;
 use std::net::{Ipv6Addr, UdpSocket};
 use std::sync::mpsc::{self, Sender};
@@ -100,10 +99,10 @@ mod timeout {
     pub const MRT: f32 = 1024.0;
     /// Maximum Retrasmission Count (0 = infinite)
     pub const MRC: usize = 0;
-    ///
+    /// The maximum jitter used for timouts
     pub const RAND: f32 = 0.2;
-    ///
-    pub const REASONABLE_LIFETIME: Duration = Duration::from_secs(60 * 60 * 24);
+    /// A reasonable lifetime length for when the lifetime recevied seems to big
+    pub const REASONABLE_LIFETIME: u32 = 60 * 60 * 24;
 
     /// Generates the 1 + RAND factor used in the IRT and RT functions
     pub fn rand<R: rand::Rng>(mut rng: R) -> f32 {
@@ -161,29 +160,24 @@ mod timeout {
 /// # Examples
 ///
 /// Creating a `Client` is as spimple as:
-/**
-
-    use std::net::Ipv4Addr;
-
-    // This is the address of your host in your local network
-    let pcp_client = Ipv4Addr::new(192, 168, 1, 101);
-
-    // Most of the times it's the default gateway address
-    let pcp_server = Ipv4Addr::new(192, 168, 1, 1);
-
-    // Start the PCP client service
-    let handle = Client::<Ipv4Addr>::start(pcp_client, pcp_server).unwrap();
-
-*/
+/// ```
+/// use std::net::Ipv4Addr;
+/// // This is the address of your host in your local network
+/// let pcp_client = Ipv4Addr::new(192, 168, 1, 101);
+/// // Most of the times it's the default gateway address
+/// let pcp_server = Ipv4Addr::new(192, 168, 1, 1);
+/// // Start the PCP client service
+/// let handle = Client::<Ipv4Addr>::start(pcp_client, pcp_server).unwrap();
+/// ```
 pub struct Client<Ip: IpAddress> {
     /// IP Address (or addresses) of the client
     addr: Ip,
     /// Socket connected to the PCP server
     socket: UdpSocket,
     /// Receiver where the events come from
-    event_receiver: mpsc::Receiver<Event<Ip>>,
+    event_receiver: mpsc::Receiver<ServerEvent<Ip>>,
     /// Event source used for initializing `Delay`s
-    event_source: mpsc::Sender<Event<Ip>>,
+    event_source: mpsc::Sender<ServerEvent<Ip>>,
     /// Sender connected to this client's handler, used for notifying eventual errors
     to_handle: mpsc::Sender<Error>,
     /// Vector containing the data of each mapping
@@ -195,14 +189,16 @@ pub struct Client<Ip: IpAddress> {
 }
 
 impl<Ip: IpAddress> Client<Ip> {
-    /// Creates a new `Client` and starts it on a different thread; the return value is the `Sender`
-    /// of `Event`s connected to the client's `Receiver` from which the client will listen for
-    /// incoming events
+    /// Creates a new [`Client`] that will comunicate with the PCP server connected to `socket`,
+    /// from the local interface with address `addr`.
+    ///
+    /// The created [`Client`] will run on a separate thread and any interaction with it is made
+    /// through the returned [`Sender`] of [`Event`]s.
     fn open(
         socket: UdpSocket,
         addr: Ip,
         to_handle: mpsc::Sender<Error>,
-    ) -> mpsc::Sender<Event<Ip>> {
+    ) -> mpsc::Sender<ServerEvent<Ip>> {
         let (tx, event_receiver) = mpsc::channel();
         let event_source = tx.clone();
         std::thread::spawn(move || {
@@ -222,18 +218,13 @@ impl<Ip: IpAddress> Client<Ip> {
     }
 
     /// Returns the next available index to which a new mapping can be stored; if the vector is
-    /// full it'll return None, if there is an empty space it'll return its index
+    /// full it'll return [`None`], if there is an empty space it'll return its index
     fn next_index(&self) -> usize {
         // A dropped mapping has no reason to exist anymore, thus it's index can be reused
         self.mappings
             .iter()
             .position(|m| m.state == State::Dropped)
             .unwrap_or(self.mappings.len())
-    }
-
-    /// Generate the noce of the mapping randomly
-    fn generate_nonce(&mut self) -> [u8; 12] {
-        self.rng.gen()
     }
 
     /// Validate the epoch according to the previous one and time elapsed since then
@@ -309,14 +300,14 @@ impl<Ip: IpAddress> Client<Ip> {
         loop {
             match self.event_receiver.recv()? {
                 // The handler request an inbound mapping
-                Event::InboundMap(m, k, h) => self.new_inbound(m, k, h)?,
+                ServerEvent::InboundMap(m, k, h) => self.new_inbound(m, k, h)?,
                 // The handler request an outbound mapping
-                Event::OutboundMap(m, k, h) => self.new_outbound(m, k, h)?,
+                ServerEvent::OutboundMap(m, k, h) => self.new_outbound(m, k, h)?,
                 // The relative handle of this mapping has been dropped or
                 // the handler requests to revoke a mapping
-                ev @ Event::Drop(_) | ev @ Event::Revoke(_) => {
+                ev @ ServerEvent::Drop(_) | ev @ ServerEvent::Revoke(_) => {
                     let mapping = &mut self.mappings[match ev {
-                        Event::Revoke(id) | Event::Drop(id) => id,
+                        ServerEvent::Revoke(id) | ServerEvent::Drop(id) => id,
                         _ => unreachable!(),
                     }];
                     // Delete the lifetime and reset the buffer
@@ -329,13 +320,13 @@ impl<Ip: IpAddress> Client<Ip> {
                     self.socket.send(&buffer)?;
 
                     mapping.state = match ev {
-                        Event::Revoke(_) => State::Revoked,
-                        Event::Drop(_) => State::Dropped,
+                        ServerEvent::Revoke(_) => State::Revoked,
+                        ServerEvent::Drop(_) => State::Dropped,
                         _ => unreachable!(),
                     };
                 }
                 // The handler requests to renew a mapping
-                Event::Renew(id, lifetime) => {
+                ServerEvent::Renew(id, lifetime) => {
                     let mapping = &mut self.mappings[id];
                     // Update the lifetime
                     mapping.request.header.lifetime = lifetime;
@@ -348,10 +339,10 @@ impl<Ip: IpAddress> Client<Ip> {
                         Delay::by(timeout::irt(&mut self.rng), id, self.event_source.clone());
                 }
                 // A delay has ended
-                Event::Delay(id, waited) => self.delay_expired(id, waited)?,
-                Event::ServerResponse(when, packet) => self.server_response(packet, when)?,
-                Event::Shutdown => return Ok(()),
-                Event::ListenError(error) => return Err(error),
+                ServerEvent::Delay(id, waited) => self.delay_expired(id, waited)?,
+                ServerEvent::ServerResponse(when, packet) => self.server_response(packet, when)?,
+                ServerEvent::Shutdown => return Ok(()),
+                ServerEvent::ListenError(error) => return Err(error),
             }
         }
     }
@@ -413,7 +404,7 @@ impl<Ip: IpAddress> Client<Ip> {
             2,
             map.lifetime,
             self.addr.to_ipv6(),
-            self.generate_nonce(),
+            self.rng.gen(),
             map.protocol,
             map.internal_port,
             map.external_port.unwrap_or(0),
@@ -443,7 +434,7 @@ impl<Ip: IpAddress> Client<Ip> {
             2,
             map.lifetime,
             self.addr.to_ipv6(),
-            self.generate_nonce(),
+            self.rng.gen(),
             map.protocol,
             map.internal_port,
             map.external_port.unwrap_or(0),
@@ -461,6 +452,9 @@ impl<Ip: IpAddress> Client<Ip> {
     fn delay_expired(&mut self, id: usize, waited: Duration) -> Result<(), Error> {
         let mapping = &mut self.mappings[id];
         match mapping.state {
+            State::Starting(n) if n == timeout::MRC => {
+                todo!("the mapping failed, server didn't respond")
+            }
             // The mapping was in a starting state, this means that the packet was
             // already been sent n times but the server, still, didn't respond, thus
             // the client will try to send it again
@@ -525,12 +519,9 @@ impl<Ip: IpAddress> Client<Ip> {
             let p_lifetime = packet.header.lifetime;
 
             mapping.delay.ignore();
-            // It's not granted that the requested lifetime matches the
-            // assigned one
-            if m_lifetime != p_lifetime {
-                mapping.request.header.lifetime = p_lifetime;
-                mapping.clear();
-            }
+            // It's not granted that the requested lifetime matches the assigned one
+            mapping.request.header.lifetime = p_lifetime.min(timeout::REASONABLE_LIFETIME);
+            mapping.clear();
             // After a success response the mapping is running
             mapping.state = State::Running;
 
@@ -572,15 +563,16 @@ impl<Ip: IpAddress> Client<Ip> {
         Ok(())
     }
 
-    fn listen(socket: UdpSocket, to_client: mpsc::Sender<Event<Ip>>) {
+    fn listen(socket: UdpSocket, to_client: mpsc::Sender<ServerEvent<Ip>>) {
+        use std::convert::TryInto;
+
         let mut buf = [0; MAX_PACKET_SIZE];
         std::thread::spawn(move || loop {
-            if let Ok(bytes) = socket.recv(&mut buf) {
-                match ResponsePacket::try_from(&buf[..bytes]) {
-                    Ok(packet) => to_client.send(Event::packet_event(packet)).ok(),
-                    Err(error) => to_client.send(Event::ListenError(error.into())).ok(),
-                };
-            }
+            let response = socket.recv(&mut buf).map_err(<_>::from);
+            let _ = match response.and_then(|bytes| Ok(buf[..bytes].try_into()?)) {
+                Ok(packet) => to_client.send(ServerEvent::ServerResponse(Instant::now(), packet)),
+                Err(error) => to_client.send(ServerEvent::ListenError(error)),
+            };
         });
     }
 
