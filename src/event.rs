@@ -11,10 +11,18 @@ use std::time::{Duration, Instant};
 pub enum ServerEvent<Ip: IpAddress> {
     /// The handler requests an inbound mapping; the first Sender tells the map handler the id of
     /// the mapping
-    InboundMap(InboundMap<Ip>, RequestType, mpsc::Sender<Option<usize>>),
+    InboundMap {
+        map: InboundMap<Ip>,
+        ty: RequestType,
+        handle: mpsc::Sender<Option<usize>>,
+    },
     /// The handler requests an outbound mapping; the first Sender tells the map handler the id of
     /// the mapping
-    OutboundMap(OutboundMap<Ip>, RequestType, mpsc::Sender<Option<usize>>),
+    OutboundMap {
+        map: OutboundMap<Ip>,
+        ty: RequestType,
+        handle: mpsc::Sender<Option<usize>>,
+    },
     /// The handler of the mapping requests to revoke a mapping
     Revoke(usize),
     /// The handler of the mapping requests to renew a mapping for the specified lifetime
@@ -63,4 +71,8 @@ impl Delay {
             .map(|channel| matches!(channel.send(()), Ok(_)))
             .unwrap_or(false)
     }
+}
+
+pub enum ClientEvent {
+    StateChange { mapping_id: usize },
 }

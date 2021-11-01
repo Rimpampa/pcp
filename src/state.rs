@@ -1,7 +1,7 @@
 use super::event::Delay;
 use super::handle::RequestType;
 use crate::types::{RequestPacket, ResultCode, MAX_PACKET_SIZE};
-use std::net::IpAddr;
+use std::{net::IpAddr, time::Duration};
 
 /// A notitification sent when the state of a mapping changes
 /// or when the external address selected by the server is recieved
@@ -44,6 +44,9 @@ pub struct MappingState {
     size: usize,
     /// Type of request
     pub kind: RequestType,
+    /// Remaining lifetime
+    pub rem: Duration,
+    pub renew: Duration,
 }
 
 impl MappingState {
@@ -57,6 +60,8 @@ impl MappingState {
             request,
             buffer,
             kind,
+            rem: Duration::ZERO,
+            renew: Duration::ZERO,
         }
     }
 

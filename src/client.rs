@@ -93,6 +93,8 @@ use std::time::{Duration, Instant};
 mod timeout {
     use std::time::Duration;
 
+    use rand::{distributions::Uniform, prelude::Distribution};
+
     /// Initial Retrasmission Time
     pub const IRT: f32 = 3.0;
     /// Maximum Restrasmission Time
@@ -104,45 +106,49 @@ mod timeout {
     /// A reasonable lifetime length for when the lifetime recevied seems to big
     pub const REASONABLE_LIFETIME: u32 = 60 * 60 * 24;
 
-    /// Generates the 1 + RAND factor used in the IRT and RT functions
-    pub fn rand<R: rand::Rng>(mut rng: R) -> f32 {
+    /// **O**ne **P**lus **R**and:
+    /// generates the `1 + RAND` factor used in some of the time releated functions
+    pub fn opr<R: rand::Rng>(rng: &mut R) -> f32 {
         const BASE: f32 = 1.0 - RAND * 0.5;
-        BASE + rng.gen::<f32>() * RAND
+        Uniform::new(BASE, BASE + RAND).sample(rng)
     }
 
-    /// Generates the Initial Retrasmission Time (IRT) using the following formula:
-    ///
-    /// RT = (1 + RAND) * IRT
-    pub fn irt<R: rand::Rng>(rng: R) -> Duration {
-        Duration::from_secs_f32(rand(rng) * IRT)
+    /// Generates the **I**nitial **R**etrasmission **T**ime (IRT):
+    /// `RT = (1 + RAND) * IRT`
+    pub fn irt<R: rand::Rng>(rng: &mut R) -> Duration {
+        Duration::from_secs_f32(opr(rng) * IRT)
     }
 
     /// Generates the Retrasmission Time (RT) using the following formula:
     ///
     /// RT = (1 + RAND) * MIN (2 * RTprev, MRT)
-    pub fn rt<R: rand::Rng>(rng: R, rt_prev: Duration) -> Duration {
-        Duration::from_secs_f32(rand(rng) * MRT.min(2.0 * rt_prev.as_secs_f32()))
+    pub fn rt<R: rand::Rng>(rng: &mut R, rt_prev: Duration) -> Duration {
+        Duration::from_secs_f32(opr(rng) * MRT.min(2.0 * rt_prev.as_secs_f32()))
     }
 
-    /// Computes the duration needed to wait for the retrasmission of a keepalive request
-    pub fn jitter<R: rand::Rng>(mut rng: R, lifetime: u32, times: usize) -> Option<Duration> {
-        let ftime = lifetime as f32
-            * if times == 0 {
-                // (1/2)~(5/8) --> 1/2 + 0~1 * 1/8
-                0.5 + rng.gen::<f32>() * 0.125
-            } else {
-                // Not sure of this formula, it's not explicitly written in the specification
-                // n = number of attempts (subsequent to the first)
-                // (2^(n+1)-1)/2^(n+1) + 0~1 * 1/(2^(n+3))
-                let denom = 4 << times;
-                let base = (denom - 1) as f32 / denom as f32;
-                base + rng.gen::<f32>() / (8 << times) as f32
-            };
-        if ftime < 4.0 {
-            None
-        } else {
-            Some(Duration::from_secs_f32(ftime))
-        }
+    /// Returns the duration it has to wait for the trasmission (or retrasmission) of a
+    /// keepalive request, where `times` is the number of previous attempts (thus 0 the first
+    /// time) and `rem` is the remaining lifetime of the mapping.
+    ///
+    /// From the RFC:
+    /// > The PCP client SHOULD renew the mapping before its expiry time;
+    /// > otherwise, it will be removed by the PCP server. To reduce the risk of inadvertent
+    /// > synchronization of renewal requests, a random jitter component should
+    /// > be included.  It is RECOMMENDED that PCP clients send a single
+    /// > renewal request packet at a time chosen with uniform random
+    /// > distribution in the range 1/2 to 5/8 of expiration time.  If no
+    /// > SUCCESS response is received, then the next renewal request should be
+    /// > sent 3/4 to 3/4 + 1/16 to expiration, and then another 7/8 to 7/8 +
+    /// > 1/32 to expiration, and so on, subject to the constraint that renewal
+    /// > requests MUST NOT be sent less than four seconds apart (a PCP client
+    /// > MUST NOT send a flood of ever-closer-together requests in the last
+    /// > few seconds before a mapping expires).
+    pub fn renew<R: rand::Rng>(rng: &mut R, rem: Duration, times: usize) -> Option<Duration> {
+        let times = times.try_into().ok()?;
+        let pr = 0.5f32.powi(times);
+        Some(Uniform::new(1.0 - pr, 1.0 - 1.25 * pr).sample(rng) * rem.as_secs_f32())
+            .filter(|&t| t >= 4.0)
+            .map(Duration::from_secs_f32)
     }
 }
 
@@ -267,8 +273,10 @@ impl<Ip: IpAddress> Client<Ip> {
 
     fn update_mapping(&mut self, id: usize, times: usize) -> Result<(), Error> {
         let map = &mut self.mappings[id];
-        match timeout::jitter(&mut self.rng, map.request.header.lifetime, times) {
+        map.rem -= map.renew;
+        match timeout::renew(&mut self.rng, map.rem, times) {
             Some(delay) => {
+                map.renew = delay;
                 // Resend the request
                 self.socket.send(map.bytes())?;
                 map.state = State::Updating(times, map.request.header.lifetime);
@@ -282,6 +290,7 @@ impl<Ip: IpAddress> Client<Ip> {
     /// Function used as a catch for the errors that might be generated while running the client
     fn handle_errors(mut self) {
         loop {
+            // TODO: better error handling and recovery
             match self.run() {
                 // Ok(()) is returned only when the shoutdown event is received
                 Ok(()) => break,
@@ -297,19 +306,23 @@ impl<Ip: IpAddress> Client<Ip> {
     }
 
     fn run(&mut self) -> Result<(), Error> {
+        use ServerEvent as Ev;
+
         loop {
             match self.event_receiver.recv()? {
                 // The handler request an inbound mapping
-                ServerEvent::InboundMap(m, k, h) => self.new_inbound(m, k, h)?,
+                Ev::InboundMap { map, ty, handle } => self.new_inbound(map, ty, handle)?,
                 // The handler request an outbound mapping
-                ServerEvent::OutboundMap(m, k, h) => self.new_outbound(m, k, h)?,
+                Ev::OutboundMap { map, ty, handle } => self.new_outbound(map, ty, handle)?,
                 // The relative handle of this mapping has been dropped or
                 // the handler requests to revoke a mapping
-                ev @ ServerEvent::Drop(_) | ev @ ServerEvent::Revoke(_) => {
-                    let mapping = &mut self.mappings[match ev {
-                        ServerEvent::Revoke(id) | ServerEvent::Drop(id) => id,
-                        _ => unreachable!(),
-                    }];
+                // NOTE:
+                // This means a MAP or PEER request with lifetime of 0 will only set the assigned
+                // lifetime to 0 (i.e., delete the mapping) if the internal host had not sent a
+                // packet using that mapping for the idle-timeout time, otherwise the assigned
+                // lifetime will be the remaining idle-timeout time.
+                ref ev @ Ev::Drop(id) | ref ev @ Ev::Revoke(id) => {
+                    let mapping = &mut self.mappings[id];
                     // Delete the lifetime and reset the buffer
                     mapping.request.header.lifetime = 0;
                     mapping.clear();
@@ -320,15 +333,16 @@ impl<Ip: IpAddress> Client<Ip> {
                     self.socket.send(&buffer)?;
 
                     mapping.state = match ev {
-                        ServerEvent::Revoke(_) => State::Revoked,
-                        ServerEvent::Drop(_) => State::Dropped,
+                        Ev::Revoke(_) => State::Revoked,
+                        Ev::Drop(_) => State::Dropped,
                         _ => unreachable!(),
                     };
                 }
                 // The handler requests to renew a mapping
-                ServerEvent::Renew(id, lifetime) => {
+                Ev::Renew(id, lifetime) => {
                     let mapping = &mut self.mappings[id];
                     // Update the lifetime
+                    mapping.rem = Duration::from_secs(lifetime as u64);
                     mapping.request.header.lifetime = lifetime;
                     mapping.delay.ignore();
                     // Update the buffer and send the packet
@@ -339,10 +353,10 @@ impl<Ip: IpAddress> Client<Ip> {
                         Delay::by(timeout::irt(&mut self.rng), id, self.event_source.clone());
                 }
                 // A delay has ended
-                ServerEvent::Delay(id, waited) => self.delay_expired(id, waited)?,
-                ServerEvent::ServerResponse(when, packet) => self.server_response(packet, when)?,
-                ServerEvent::Shutdown => return Ok(()),
-                ServerEvent::ListenError(error) => return Err(error),
+                Ev::Delay(id, waited) => self.delay_expired(id, waited)?,
+                Ev::ServerResponse(when, packet) => self.server_response(packet, when)?,
+                Ev::Shutdown => return Ok(()),
+                Ev::ListenError(error) => return Err(error),
             }
         }
     }
@@ -458,6 +472,7 @@ impl<Ip: IpAddress> Client<Ip> {
             // The mapping was in a starting state, this means that the packet was
             // already been sent n times but the server, still, didn't respond, thus
             // the client will try to send it again
+            // TODO: manage the MRD timeout
             State::Starting(n) => {
                 mapping.state = State::Starting(n + 1);
                 self.socket.send(mapping.bytes())?;
@@ -517,6 +532,7 @@ impl<Ip: IpAddress> Client<Ip> {
 
             let m_lifetime = mapping.request.header.lifetime;
             let p_lifetime = packet.header.lifetime;
+            mapping.rem = Duration::from_secs(packet.header.lifetime as u64);
 
             mapping.delay.ignore();
             // It's not granted that the requested lifetime matches the assigned one
@@ -528,9 +544,10 @@ impl<Ip: IpAddress> Client<Ip> {
             let wait = match mapping.kind {
                 RequestType::Repeat(0) => Duration::from_secs(m_lifetime as u64),
                 RequestType::KeepAlive | RequestType::Repeat(_) => {
-                    timeout::jitter(&mut self.rng, m_lifetime, 0).unwrap_or_default()
+                    timeout::renew(&mut self.rng, mapping.rem, 0).unwrap_or_default()
                 }
             };
+            mapping.renew = wait;
             // Set the delay for when it expires
             mapping.delay = Delay::by(wait, idx, self.event_source.clone())
         }
@@ -564,8 +581,6 @@ impl<Ip: IpAddress> Client<Ip> {
     }
 
     fn listen(socket: UdpSocket, to_client: mpsc::Sender<ServerEvent<Ip>>) {
-        use std::convert::TryInto;
-
         let mut buf = [0; MAX_PACKET_SIZE];
         std::thread::spawn(move || loop {
             let response = socket.recv(&mut buf).map_err(<_>::from);

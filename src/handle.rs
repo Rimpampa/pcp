@@ -139,7 +139,11 @@ impl<Ip: IpAddress> Requester<InboundMap<Ip>> for Handle<Ip> {
     fn request(&self, map: InboundMap<Ip>, kind: RequestType) -> Result<usize, Error> {
         let (id_tx, id_rx) = mpsc::channel();
         self.to_client
-            .send(ServerEvent::InboundMap(map, kind, id_tx))
+            .send(ServerEvent::InboundMap {
+                map,
+                ty: kind,
+                handle: id_tx,
+            })
             .unwrap();
         id_rx.recv().unwrap().ok_or_else(|| self.wait_err())
     }
@@ -149,7 +153,11 @@ impl<Ip: IpAddress> Requester<OutboundMap<Ip>> for Handle<Ip> {
     fn request(&self, map: OutboundMap<Ip>, kind: RequestType) -> Result<usize, Error> {
         let (id_tx, id_rx) = mpsc::channel();
         self.to_client
-            .send(ServerEvent::OutboundMap(map, kind, id_tx))
+            .send(ServerEvent::OutboundMap {
+                map,
+                ty: kind,
+                handle: id_tx,
+            })
             .unwrap();
         id_rx.recv().unwrap().ok_or_else(|| self.wait_err())
     }
