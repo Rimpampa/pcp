@@ -74,6 +74,7 @@
 
 use super::event::{Delay, ServerEvent};
 use super::handle::{Error, RequestType};
+use crate::event::ClientEvent;
 use crate::state::MappingState;
 use crate::types::{
     Epoch, MapRequestPayload, MapResponsePayload, PacketOption, PeerRequestPayload,
@@ -185,7 +186,7 @@ pub struct Client<Ip: IpAddress> {
     /// Event source used for initializing `Delay`s
     event_source: mpsc::Sender<ServerEvent<Ip>>,
     /// Sender connected to this client's handler, used for notifying eventual errors
-    to_handle: mpsc::Sender<Error>,
+    to_handle: mpsc::Sender<ClientEvent<Ip>>,
     /// Vector containing the data of each mapping
     mappings: Vec<MappingState>,
     /// Thread local RNG, used for generating RTs and mapping nonces
@@ -203,7 +204,7 @@ impl<Ip: IpAddress> Client<Ip> {
     fn open(
         socket: UdpSocket,
         addr: Ip,
-        to_handle: mpsc::Sender<Error>,
+        to_handle: mpsc::Sender<ClientEvent<Ip>>,
     ) -> mpsc::Sender<ServerEvent<Ip>> {
         let (tx, event_receiver) = mpsc::channel();
         let event_source = tx.clone();
@@ -295,10 +296,10 @@ impl<Ip: IpAddress> Client<Ip> {
                 // Ok(()) is returned only when the shoutdown event is received
                 Ok(()) => break,
                 Err(err @ Error::Parsing(_)) => {
-                    self.to_handle.send(err).ok();
+                    self.to_handle.send(ClientEvent::Service(err)).ok();
                 }
                 Err(err @ Error::Socket(_)) | Err(err @ Error::Channel(_)) => {
-                    self.to_handle.send(err).ok();
+                    self.to_handle.send(ClientEvent::Service(err)).ok();
                     break;
                 }
             }
@@ -356,7 +357,6 @@ impl<Ip: IpAddress> Client<Ip> {
                 Ev::Delay(id, waited) => self.delay_expired(id, waited)?,
                 Ev::ServerResponse(when, packet) => self.server_response(packet, when)?,
                 Ev::Shutdown => return Ok(()),
-                Ev::ListenError(error) => return Err(error),
             }
         }
     }
@@ -583,10 +583,10 @@ impl<Ip: IpAddress> Client<Ip> {
     fn listen(socket: UdpSocket, to_client: mpsc::Sender<ServerEvent<Ip>>) {
         let mut buf = [0; MAX_PACKET_SIZE];
         std::thread::spawn(move || loop {
-            let response = socket.recv(&mut buf).map_err(<_>::from);
+            let response = socket.recv(&mut buf).map_err(Error::from);
             let _ = match response.and_then(|bytes| Ok(buf[..bytes].try_into()?)) {
                 Ok(packet) => to_client.send(ServerEvent::ServerResponse(Instant::now(), packet)),
-                Err(error) => to_client.send(ServerEvent::ListenError(error)),
+                Err(_) => todo!(),
             };
         });
     }

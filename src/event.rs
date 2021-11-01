@@ -35,8 +35,6 @@ pub enum ServerEvent<Ip: IpAddress> {
     ServerResponse(Instant, ResponsePacket),
     /// A delay has ended
     Delay(usize, Duration),
-    /// The listening thread generated an error
-    ListenError(Error),
 }
 
 /// An handle to a waiting thread: one the thread wait ends an event is sent
@@ -73,6 +71,34 @@ impl Delay {
     }
 }
 
-pub enum ClientEvent {
-    StateChange { mapping_id: usize },
+pub enum ClientEvent<Ip: IpAddress> {
+    Map(MapEvent<Ip>),
+    Service(Error),
+}
+
+pub struct MapEvent<Ip: IpAddress> {
+    id: usize,
+    kind: MapEventKind<Ip>,
+}
+
+impl<Ip: IpAddress> MapEvent<Ip> {
+    fn new(id: usize, kind: MapEventKind<Ip>) -> Self {
+        Self { id, kind }
+    }
+}
+
+pub enum MapEventKind<Ip: IpAddress> {
+    /// The mapping was accepted by the PCP server and is now running
+    Accpeted {
+        /// The accepted lifetime
+        lifetime: u32,
+        /// The assigned external IP address
+        external_ip: Ip,
+        /// The assigned external port
+        external_port: u16,
+    },
+    /// The mapping lifetime has expired, the mapping is no longer running
+    Expired,
+    /// The mapping received an error of some sort
+    Error,
 }

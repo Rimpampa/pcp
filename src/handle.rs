@@ -1,5 +1,6 @@
 use super::event::ServerEvent;
 use super::map::{InboundMap, Map, OutboundMap};
+use crate::event::ClientEvent;
 use crate::types::ParsingError;
 use crate::IpAddress;
 use std::sync::mpsc::{self, RecvError};
@@ -88,13 +89,13 @@ impl fmt::Display for Error {
 /// ```
 pub struct Handle<Ip: IpAddress> {
     to_client: mpsc::Sender<ServerEvent<Ip>>,
-    from_client: mpsc::Receiver<Error>,
+    from_client: mpsc::Receiver<ClientEvent<Ip>>,
 }
 
 impl<Ip: IpAddress> Handle<Ip> {
     pub(crate) fn new(
         to_client: mpsc::Sender<ServerEvent<Ip>>,
-        from_client: mpsc::Receiver<Error>,
+        from_client: mpsc::Receiver<ClientEvent<Ip>>,
     ) -> Self {
         Handle {
             to_client,
@@ -102,19 +103,17 @@ impl<Ip: IpAddress> Handle<Ip> {
         }
     }
 
-    /// Waits for an error to arrive
-    pub fn wait_err(&self) -> Error {
-        self.from_client.recv().unwrap_or_else(Error::from)
-    }
-
-    /// Returns `Some(Error)` if an error has been received, `None` otherwise
-    pub fn poll_err(&self) -> Option<Error> {
-        self.from_client.try_recv().ok()
-    }
-
     /// Signals the `Client` to end execution
     pub fn shutdown(self) {
         self.to_client.send(ServerEvent::Shutdown).ok();
+    }
+}
+
+impl<Ip: IpAddress> Iterator for Handle<Ip> {
+    type Item = ClientEvent<Ip>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.from_client.recv().ok()
     }
 }
 
@@ -145,7 +144,7 @@ impl<Ip: IpAddress> Requester<InboundMap<Ip>> for Handle<Ip> {
                 handle: id_tx,
             })
             .unwrap();
-        id_rx.recv().unwrap().ok_or_else(|| self.wait_err())
+        id_rx.recv().unwrap().ok_or_else(|| todo!()) // self.wait_err())
     }
 }
 
@@ -159,7 +158,7 @@ impl<Ip: IpAddress> Requester<OutboundMap<Ip>> for Handle<Ip> {
                 handle: id_tx,
             })
             .unwrap();
-        id_rx.recv().unwrap().ok_or_else(|| self.wait_err())
+        id_rx.recv().unwrap().ok_or_else(|| todo!()) // self.wait_err())
     }
 }
 
