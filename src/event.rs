@@ -1,7 +1,7 @@
-use super::handle::{Error, RequestType};
+use super::handle::Error;
 use super::map::{InboundMap, OutboundMap};
 use crate::types::ResponsePacket;
-use crate::IpAddress;
+use crate::{IpAddress, RequestKind};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,22 +13,20 @@ pub enum ServerEvent<Ip: IpAddress> {
     /// the mapping
     InboundMap {
         map: InboundMap<Ip>,
-        ty: RequestType,
-        handle: mpsc::Sender<Option<usize>>,
+        kind: RequestKind,
+        id: usize,
     },
     /// The handler requests an outbound mapping; the first Sender tells the map handler the id of
     /// the mapping
     OutboundMap {
         map: OutboundMap<Ip>,
-        ty: RequestType,
-        handle: mpsc::Sender<Option<usize>>,
+        kind: RequestKind,
+        id: usize,
     },
     /// The handler of the mapping requests to revoke a mapping
     Revoke(usize),
     /// The handler of the mapping requests to renew a mapping for the specified lifetime
     Renew(usize, u32),
-    /// The handler of the mapping has been dropped
-    Drop(usize),
     /// The handler of the client has dropped or has requested to shutdown the service
     Shutdown,
     /// The server sent a respone packet
@@ -77,12 +75,12 @@ pub enum ClientEvent<Ip: IpAddress> {
 }
 
 pub struct MapEvent<Ip: IpAddress> {
-    id: usize,
-    kind: MapEventKind<Ip>,
+    pub id: usize,
+    pub kind: MapEventKind<Ip>,
 }
 
 impl<Ip: IpAddress> MapEvent<Ip> {
-    fn new(id: usize, kind: MapEventKind<Ip>) -> Self {
+    pub fn new(id: usize, kind: MapEventKind<Ip>) -> Self {
         Self { id, kind }
     }
 }
@@ -101,4 +99,6 @@ pub enum MapEventKind<Ip: IpAddress> {
     Expired,
     /// The mapping received an error of some sort
     Error,
+    /// The mapping has been assigned a new identifier
+    NewId(usize),
 }

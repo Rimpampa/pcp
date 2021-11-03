@@ -1,6 +1,6 @@
 use super::event::ServerEvent;
 use super::map::{InboundMap, Map, OutboundMap};
-use crate::event::ClientEvent;
+use crate::event::{ClientEvent, MapEventKind};
 use crate::types::ParsingError;
 use crate::IpAddress;
 use std::sync::mpsc::{self, RecvError};
@@ -52,12 +52,12 @@ impl fmt::Display for Error {
 
 /// An handle to a PCP client service
 ///
-/// When a `Client` is started its `Handle` is returned and can be used to
+/// When a [`Client`][client] is started its [`Handle`] is returned and can be used to
 ///
 /// # Examples
 /// `request` mappings and to query its state.
 ///
-/// ### Submitting a request
+/// ## Submitting a request
 ///
 /// Request an inbound mapping to the port 120 TCP:
 /// ```
@@ -69,24 +69,9 @@ impl fmt::Display for Error {
 /// let map = InboundMap::new(6000, 120).protocol(ProtocolNumber::Tcp);
 ///
 /// // Submit the request to the client, it will live one time
-/// let map_handle = handle.request(map, RequestType::Once).unwrap();
+/// handle.request(map, RequestType::Once);
 /// ```
-///
-/// ### Querying the state
-///
-/// Check if the `Client` reported any errors:
-///
-/// ```
-/// // Start the PCP client service
-/// let handle = Client::<Ipv4Addr>::start(client, server).unwrap();
-///
-/// // Do stuff...
-///
-/// // Non blocking, use wait_err to block until a new error arrives
-/// if let Some(err) = handle.poll_err() {
-/// println!("The client reported an error: {}", err);
-/// }
-/// ```
+/// [client]: crate::client::Client
 pub struct Handle<Ip: IpAddress> {
     to_client: mpsc::Sender<ServerEvent<Ip>>,
     from_client: mpsc::Receiver<ClientEvent<Ip>>,
@@ -103,9 +88,67 @@ impl<Ip: IpAddress> Handle<Ip> {
         }
     }
 
-    /// Signals the `Client` to end execution
-    pub fn shutdown(self) {
-        self.to_client.send(ServerEvent::Shutdown).ok();
+    /// Renew the mapping with a new lifetime
+    ///
+    /// This won't have any effect if the provided lifetime is smaller than the current one.
+    /// This is better described in the docs for [`shutdown()`]
+    pub fn renew(&mut self, id: usize, lifetime: u32) -> bool {
+        self.to_client
+            .send(ServerEvent::Renew(id, lifetime))
+            .is_ok()
+    }
+
+    /// Revokes the specified mapping
+    ///
+    /// This will in turn stop that mapping from being renewed but it won't expire until the end of
+    /// it's lifetime. This is better described in the docs for [`shutdown()`]
+    pub fn revoke(&mut self, id: usize) -> bool {
+        self.to_client.send(ServerEvent::Revoke(id)).is_ok()
+    }
+
+    /// Signals the [`Client`](crate::client::Client) to end the execution of the PCP mapping
+    /// service
+    ///
+    /// This won't close all the mappings as once the lifetime of a mapping has beed established
+    /// it can't be manually (by a client) reduced as described in the RFC:
+    ///
+    /// > **15. Mapping Lifetime and Deletition**
+    /// >
+    /// > [[...]]
+    /// >
+    /// > It would be unacceptable if an
+    /// > attacker could use PCP to intentionally speed up this reassignment of
+    /// > the external port in order to deliberately steal traffic intended for
+    /// > the current holder, by (i) spoofing PCP requests using the current
+    /// > holder's source IP address and mapping nonce to fraudulently delete
+    /// > the mapping or shorten its lifetime, and then (ii) subsequently
+    /// > claiming the external port for itself.
+    /// >
+    /// > Therefore, in the simple security model, to protect against this
+    /// > attack, PCP MUST NOT allow a PCP request (even a PCP request that
+    /// > appears to come from the current holder of the mapping) to cause a
+    /// > mapping to expire sooner than it would naturally have expired
+    /// > otherwise by virtue of outbound traffic keeping the mapping active.
+    /// > A PCP server MUST set the lifetime of a mapping to no less than the
+    /// > remaining time before the mapping would expire if no further outbound
+    /// > traffic is seen for that mapping.  This means a MAP or PEER request
+    /// > with lifetime of 0 will only set the assigned lifetime to 0 (i.e.,
+    /// > delete the mapping) if the internal host had not sent a packet using
+    /// > that mapping for the idle-timeout time, otherwise the assigned
+    /// > lifetime will be the remaining idle-timeout time.
+    pub fn shutdown(self) -> bool {
+        self.to_client.send(ServerEvent::Shutdown).is_ok()
+    }
+
+    /// Request a new mapping to the [`Client`][client]
+    ///
+    /// After a request is sen't a [`ClientEvent`] of [`NewId`][newidev] may be generated if the
+    /// selected mapping id is already in use.
+    ///
+    /// [client]: crate::client::Client
+    /// [newidev]: MapEventKind::NewId
+    pub fn request<R: Map<Ip>>(&self, id: usize, map: R, kind: RequestKind) -> bool {
+        self.to_client.send(map.into_event(id, kind)).is_ok()
     }
 }
 
@@ -119,51 +162,43 @@ impl<Ip: IpAddress> Iterator for Handle<Ip> {
 
 /// The number of times a request has to be submitted
 #[derive(Debug, PartialEq)]
-pub enum RequestType {
+pub enum RequestKind {
     /// Repeats for N times after the first submit (thus a value of 0 means only once)
     Repeat(usize),
     /// Continues to resend until it gets stopped manually
     KeepAlive,
 }
 
-// TODO: modify this trait to be implemented on the Requestable items instead that on the Handle
-
-/// Used to specify that the type implementing this trait can request PCP mappings
-pub trait Requester<M: Map> {
-    /// Requests the mapping and returns its identifier
-    fn request(&self, map: M, kind: RequestType) -> Result<usize, Error>;
-}
-
-impl<Ip: IpAddress> Requester<InboundMap<Ip>> for Handle<Ip> {
-    fn request(&self, map: InboundMap<Ip>, kind: RequestType) -> Result<usize, Error> {
-        let (id_tx, id_rx) = mpsc::channel();
-        self.to_client
-            .send(ServerEvent::InboundMap {
-                map,
-                ty: kind,
-                handle: id_tx,
-            })
-            .unwrap();
-        id_rx.recv().unwrap().ok_or_else(|| todo!()) // self.wait_err())
-    }
-}
-
-impl<Ip: IpAddress> Requester<OutboundMap<Ip>> for Handle<Ip> {
-    fn request(&self, map: OutboundMap<Ip>, kind: RequestType) -> Result<usize, Error> {
-        let (id_tx, id_rx) = mpsc::channel();
-        self.to_client
-            .send(ServerEvent::OutboundMap {
-                map,
-                ty: kind,
-                handle: id_tx,
-            })
-            .unwrap();
-        id_rx.recv().unwrap().ok_or_else(|| todo!()) // self.wait_err())
-    }
-}
-
 impl<Ip: IpAddress> Drop for Handle<Ip> {
     fn drop(&mut self) {
         self.to_client.send(ServerEvent::Shutdown).ok();
+    }
+}
+
+pub(crate) mod private {
+    use super::*;
+
+    pub trait Requestable<Ip: IpAddress> {
+        fn into_event(self, id: usize, kind: RequestKind) -> ServerEvent<Ip>;
+    }
+
+    impl<Ip: IpAddress> Requestable<Ip> for InboundMap<Ip> {
+        fn into_event(self, id: usize, kind: RequestKind) -> ServerEvent<Ip> {
+            ServerEvent::InboundMap {
+                map: self,
+                kind,
+                id,
+            }
+        }
+    }
+
+    impl<Ip: IpAddress> Requestable<Ip> for OutboundMap<Ip> {
+        fn into_event(self, id: usize, kind: RequestKind) -> ServerEvent<Ip> {
+            ServerEvent::OutboundMap {
+                map: self,
+                kind,
+                id,
+            }
+        }
     }
 }

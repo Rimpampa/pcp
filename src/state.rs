@@ -1,6 +1,8 @@
 use super::event::Delay;
-use super::handle::RequestType;
-use crate::types::{RequestPacket, ResultCode, MAX_PACKET_SIZE};
+use crate::{
+    types::{RequestPacket, ResultCode, MAX_PACKET_SIZE},
+    RequestKind,
+};
 use std::{net::IpAddr, time::Duration};
 
 /// A notitification sent when the state of a mapping changes
@@ -43,14 +45,14 @@ pub struct MappingState {
     buffer: [u8; MAX_PACKET_SIZE],
     size: usize,
     /// Type of request
-    pub kind: RequestType,
+    pub kind: RequestKind,
     /// Remaining lifetime
     pub rem: Duration,
     pub renew: Duration,
 }
 
 impl MappingState {
-    pub fn new(request: RequestPacket, delay: Delay, kind: RequestType) -> Self {
+    pub fn new(request: RequestPacket, delay: Delay, kind: RequestKind) -> Self {
         let mut buffer = [0; MAX_PACKET_SIZE];
         request.copy_to(&mut buffer);
         Self {

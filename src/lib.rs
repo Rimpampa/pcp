@@ -85,9 +85,9 @@ mod state;
 pub mod types;
 
 pub use client::Client;
-pub use handle::{Error, Handle, RequestType, Requester};
-pub use map::{InboundMap, OutboundMap};
-pub use state::{Alert, /* MapHandle, */ State};
+pub use handle::{Error, Handle, RequestKind};
+pub use map::{InboundMap, Map, OutboundMap};
+pub use state::{Alert, State};
 pub use types::ProtocolNumber;
 
 use std::{

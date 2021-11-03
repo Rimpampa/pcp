@@ -1,12 +1,10 @@
-use std::net::Ipv6Addr;
-
 use super::IpAddress;
 use crate::types::ProtocolNumber;
 
 /// Trait used to generalize any type of mapping
-pub trait Map {}
-impl<Ip: IpAddress> Map for InboundMap<Ip> {}
-impl<Ip: IpAddress> Map for OutboundMap<Ip> {}
+pub trait Map<Ip: IpAddress>: crate::handle::private::Requestable<Ip> {}
+impl<Ip: IpAddress> Map<Ip> for InboundMap<Ip> {}
+impl<Ip: IpAddress> Map<Ip> for OutboundMap<Ip> {}
 
 #[derive(Clone, Debug)]
 pub struct Filter<Ip: IpAddress> {

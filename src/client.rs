@@ -73,8 +73,8 @@
 //! arrives, which means that the server had some problems and lost it's state.
 
 use super::event::{Delay, ServerEvent};
-use super::handle::{Error, RequestType};
-use crate::event::ClientEvent;
+use super::handle::{Error, RequestKind};
+use crate::event::{ClientEvent, MapEvent, MapEventKind};
 use crate::state::MappingState;
 use crate::types::{
     Epoch, MapRequestPayload, MapResponsePayload, PacketOption, PeerRequestPayload,
@@ -86,7 +86,7 @@ use rand::rngs::ThreadRng;
 use rand::Rng;
 use std::io;
 use std::net::{Ipv6Addr, UdpSocket};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 // TODO: allow modifying those values
@@ -312,9 +312,9 @@ impl<Ip: IpAddress> Client<Ip> {
         loop {
             match self.event_receiver.recv()? {
                 // The handler request an inbound mapping
-                Ev::InboundMap { map, ty, handle } => self.new_inbound(map, ty, handle)?,
+                Ev::InboundMap { map, kind, id } => self.new_inbound(map, kind, id)?,
                 // The handler request an outbound mapping
-                Ev::OutboundMap { map, ty, handle } => self.new_outbound(map, ty, handle)?,
+                Ev::OutboundMap { map, kind, id } => self.new_outbound(map, kind, id)?,
                 // The relative handle of this mapping has been dropped or
                 // the handler requests to revoke a mapping
                 // NOTE:
@@ -322,7 +322,7 @@ impl<Ip: IpAddress> Client<Ip> {
                 // lifetime to 0 (i.e., delete the mapping) if the internal host had not sent a
                 // packet using that mapping for the idle-timeout time, otherwise the assigned
                 // lifetime will be the remaining idle-timeout time.
-                ref ev @ Ev::Drop(id) | ref ev @ Ev::Revoke(id) => {
+                Ev::Revoke(id) => {
                     let mapping = &mut self.mappings[id];
                     // Delete the lifetime and reset the buffer
                     mapping.request.header.lifetime = 0;
@@ -333,11 +333,7 @@ impl<Ip: IpAddress> Client<Ip> {
                     mapping.request.copy_to(&mut buffer);
                     self.socket.send(&buffer)?;
 
-                    mapping.state = match ev {
-                        Ev::Revoke(_) => State::Revoked,
-                        Ev::Drop(_) => State::Dropped,
-                        _ => unreachable!(),
-                    };
+                    mapping.state = State::Revoked;
                 }
                 // The handler requests to renew a mapping
                 Ev::Renew(id, lifetime) => {
@@ -364,35 +360,36 @@ impl<Ip: IpAddress> Client<Ip> {
     fn new_mapping(
         &mut self,
         request: RequestPacket,
-        kind: RequestType,
-        handle_id: Sender<Option<usize>>,
+        kind: RequestKind,
+        id: usize,
     ) -> Result<(), Error> {
+        // TODO: I may want to override the selected mapping
+
         // Get the index of this mapping
-        let idx = self.next_index();
-
-        let delay = Delay::by(timeout::irt(&mut self.rng), idx, self.event_source.clone());
-        // Construct the mapping
-        let mut mapping = MappingState::new(request, delay, kind);
-
-        // Send the packet
-        match self.socket.send(mapping.bytes()) {
-            Ok(_) => handle_id.send(Some(idx)).unwrap_or(()),
-            Err(err) => {
-                let _ = handle_id.send(None);
-                return Err(err.into());
-            }
+        let new_id = self.next_index();
+        if new_id != id {
+            let ev = ClientEvent::Map(MapEvent::new(id, MapEventKind::NewId(new_id)));
+            self.to_handle.send(ev).ok();
         }
 
+        let delay = Delay::by(
+            timeout::irt(&mut self.rng),
+            new_id,
+            self.event_source.clone(),
+        );
+        // Construct the mapping
+        let mapping = MappingState::new(request, delay, kind);
+
         // Insert the mapping in the list
-        self.mappings.insert(idx, mapping);
+        self.mappings.insert(new_id, mapping);
         Ok(())
     }
 
     fn new_inbound(
         &mut self,
         map: InboundMap<Ip>,
-        kind: RequestType,
-        handle_id: Sender<Option<usize>>,
+        kind: RequestKind,
+        id: usize,
     ) -> Result<(), Error> {
         // Count the number of options
         let cap =
@@ -427,15 +424,15 @@ impl<Ip: IpAddress> Client<Ip> {
         )
         .unwrap();
 
-        self.new_mapping(request, kind, handle_id)?;
+        self.new_mapping(request, kind, id)?;
         Ok(())
     }
 
     fn new_outbound(
         &mut self,
         map: OutboundMap<Ip>,
-        kind: RequestType,
-        handle_id: Sender<Option<usize>>,
+        kind: RequestKind,
+        id: usize,
     ) -> Result<(), Error> {
         // Construct a vector with all the options
         let options = match map.third_party {
@@ -459,7 +456,7 @@ impl<Ip: IpAddress> Client<Ip> {
         )
         .unwrap();
 
-        self.new_mapping(request, kind, handle_id)?;
+        self.new_mapping(request, kind, id)?;
         Ok(())
     }
 
@@ -485,12 +482,12 @@ impl<Ip: IpAddress> Client<Ip> {
             }
             // If it's running it means that the lifetime has ended
             State::Running => match mapping.kind {
-                RequestType::Repeat(0) => mapping.state = State::Expired,
-                RequestType::Repeat(n) => {
-                    mapping.kind = RequestType::Repeat(n - 1);
+                RequestKind::Repeat(0) => mapping.state = State::Expired,
+                RequestKind::Repeat(n) => {
+                    mapping.kind = RequestKind::Repeat(n - 1);
                     self.update_mapping(id, 0)?;
                 }
-                RequestType::KeepAlive => self.update_mapping(id, 0)?,
+                RequestKind::KeepAlive => self.update_mapping(id, 0)?,
             },
             State::Updating(n, _) => self.update_mapping(id, n + 1)?,
             _ => (),
@@ -542,8 +539,8 @@ impl<Ip: IpAddress> Client<Ip> {
             mapping.state = State::Running;
 
             let wait = match mapping.kind {
-                RequestType::Repeat(0) => Duration::from_secs(m_lifetime as u64),
-                RequestType::KeepAlive | RequestType::Repeat(_) => {
+                RequestKind::Repeat(0) => Duration::from_secs(m_lifetime as u64),
+                RequestKind::KeepAlive | RequestKind::Repeat(_) => {
                     timeout::renew(&mut self.rng, mapping.rem, 0).unwrap_or_default()
                 }
             };
