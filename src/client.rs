@@ -82,12 +82,13 @@ use crate::types::{
     ResultCode, MAX_PACKET_SIZE, MULTICAST_PORT, UNICAST_PORT,
 };
 use crate::{Handle, InboundMap, IpAddress, OutboundMap, State};
-use rand::rngs::ThreadRng;
 use rand::Rng;
 use std::io;
-use std::net::{Ipv6Addr, UdpSocket};
-use std::sync::mpsc;
+use std::net::Ipv6Addr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
 
 // TODO: allow modifying those values
 
@@ -109,22 +110,23 @@ mod timeout {
 
     /// **O**ne **P**lus **R**and:
     /// generates the `1 + RAND` factor used in some of the time releated functions
-    pub fn opr<R: rand::Rng>(rng: &mut R) -> f32 {
+    pub fn opr() -> f32 {
         const BASE: f32 = 1.0 - RAND * 0.5;
+        let rng = &mut rand::thread_rng();
         Uniform::new(BASE, BASE + RAND).sample(rng)
     }
 
     /// Generates the **I**nitial **R**etrasmission **T**ime (IRT):
     /// `RT = (1 + RAND) * IRT`
-    pub fn irt<R: rand::Rng>(rng: &mut R) -> Duration {
-        Duration::from_secs_f32(opr(rng) * IRT)
+    pub fn irt() -> Duration {
+        Duration::from_secs_f32(opr() * IRT)
     }
 
     /// Generates the Retrasmission Time (RT) using the following formula:
     ///
     /// RT = (1 + RAND) * MIN (2 * RTprev, MRT)
-    pub fn rt<R: rand::Rng>(rng: &mut R, rt_prev: Duration) -> Duration {
-        Duration::from_secs_f32(opr(rng) * MRT.min(2.0 * rt_prev.as_secs_f32()))
+    pub fn rt(rt_prev: Duration) -> Duration {
+        Duration::from_secs_f32(opr() * MRT.min(2.0 * rt_prev.as_secs_f32()))
     }
 
     /// Returns the duration it has to wait for the trasmission (or retrasmission) of a
@@ -144,7 +146,8 @@ mod timeout {
     /// > requests MUST NOT be sent less than four seconds apart (a PCP client
     /// > MUST NOT send a flood of ever-closer-together requests in the last
     /// > few seconds before a mapping expires).
-    pub fn renew<R: rand::Rng>(rng: &mut R, rem: Duration, times: usize) -> Option<Duration> {
+    pub fn renew(rem: Duration, times: usize) -> Option<Duration> {
+        let rng = &mut rand::thread_rng();
         let times = times.try_into().ok()?;
         let pr = 0.5f32.powi(times);
         Some(Uniform::new(1.0 - pr, 1.0 - 1.25 * pr).sample(rng) * rem.as_secs_f32())
@@ -180,7 +183,7 @@ pub struct Client<Ip: IpAddress> {
     /// IP Address (or addresses) of the client
     addr: Ip,
     /// Socket connected to the PCP server
-    socket: UdpSocket,
+    socket: Arc<UdpSocket>,
     /// Receiver where the events come from
     event_receiver: mpsc::Receiver<ServerEvent<Ip>>,
     /// Event source used for initializing `Delay`s
@@ -189,37 +192,38 @@ pub struct Client<Ip: IpAddress> {
     to_handle: mpsc::Sender<ClientEvent<Ip>>,
     /// Vector containing the data of each mapping
     mappings: Vec<MappingState>,
-    /// Thread local RNG, used for generating RTs and mapping nonces
-    rng: ThreadRng,
     /// Value of the current epoch time, paired with the instant of when it was received
     epoch: Option<Epoch>,
 }
 
 impl<Ip: IpAddress> Client<Ip> {
+    pub const MAX_PENDING_CLIENT_EVENTS: usize = 32;
+    pub const MAX_PENDING_SERVER_EVENTS: usize = 32;
+
     /// Creates a new [`Client`] that will comunicate with the PCP server connected to `socket`,
     /// from the local interface with address `addr`.
     ///
     /// The created [`Client`] will run on a separate thread and any interaction with it is made
     /// through the returned [`Sender`] of [`Event`]s.
     fn open(
-        socket: UdpSocket,
+        socket: Arc<UdpSocket>,
         addr: Ip,
         to_handle: mpsc::Sender<ClientEvent<Ip>>,
     ) -> mpsc::Sender<ServerEvent<Ip>> {
-        let (tx, event_receiver) = mpsc::channel();
+        let (tx, event_receiver) = mpsc::channel(Self::MAX_PENDING_CLIENT_EVENTS);
         let event_source = tx.clone();
-        std::thread::spawn(move || {
+        tokio::spawn(async move {
             Self {
                 addr,
                 socket,
                 event_receiver,
                 event_source,
                 mappings: Vec::new(),
-                rng: rand::thread_rng(),
                 epoch: None,
                 to_handle,
             }
             .handle_errors()
+            .await
         });
         tx
     }
@@ -235,18 +239,18 @@ impl<Ip: IpAddress> Client<Ip> {
     }
 
     /// Validate the epoch according to the previous one and time elapsed since then
-    fn validate_epoch(&mut self, curr_epoch: Epoch) -> Result<bool, Error> {
+    async fn validate_epoch(&mut self, curr_epoch: Epoch) -> Result<bool, Error> {
         let res = curr_epoch.validate_epoch(self.epoch);
         match res {
             true => self.epoch = Some(curr_epoch),
-            false => self.server_lost_state()?,
+            false => self.server_lost_state().await?,
         }
         Ok(res)
     }
 
     /// When the epoch is invalid or an announce response is received it means that the server has
     /// lost it's internal state, so all of the mappings will have to be resent
-    fn server_lost_state(&mut self) -> Result<(), Error> {
+    async fn server_lost_state(&mut self) -> Result<(), Error> {
         // Ignore all the active delays
         self.mappings.iter_mut().for_each(|map| {
             map.delay.ignore();
@@ -254,9 +258,9 @@ impl<Ip: IpAddress> Client<Ip> {
 
         let sock = &self.socket;
         // Resend the data for each mapping
-        self.mappings
-            .iter_mut()
-            .try_for_each(|map| sock.send(map.bytes()).map(|_| ()))?;
+        for map in &mut self.mappings {
+            sock.send(map.bytes()).await?;
+        }
 
         let event_source = &self.event_source;
         // Reset the state and start the new timer for each mapping
@@ -267,19 +271,19 @@ impl<Ip: IpAddress> Client<Ip> {
                 continue;
             }
             map.state = Starting(0);
-            map.delay = Delay::by(timeout::irt(&mut self.rng), id, event_source.clone());
+            map.delay = Delay::by(timeout::irt(), id, event_source.clone());
         }
         Ok(())
     }
 
-    fn update_mapping(&mut self, id: usize, times: usize) -> Result<(), Error> {
+    async fn update_mapping(&mut self, id: usize, times: usize) -> Result<(), Error> {
         let map = &mut self.mappings[id];
         map.rem -= map.renew;
-        match timeout::renew(&mut self.rng, map.rem, times) {
+        match timeout::renew(map.rem, times) {
             Some(delay) => {
                 map.renew = delay;
                 // Resend the request
-                self.socket.send(map.bytes())?;
+                self.socket.send(map.bytes()).await?;
                 map.state = State::Updating(times, map.request.header.lifetime);
                 map.delay = Delay::by(delay, id, self.event_source.clone());
             }
@@ -289,32 +293,32 @@ impl<Ip: IpAddress> Client<Ip> {
     }
 
     /// Function used as a catch for the errors that might be generated while running the client
-    fn handle_errors(mut self) {
+    async fn handle_errors(mut self) {
         loop {
             // TODO: better error handling and recovery
-            match self.run() {
+            match self.run().await {
                 // Ok(()) is returned only when the shoutdown event is received
                 Ok(()) => break,
                 Err(err @ Error::Parsing(_)) => {
-                    self.to_handle.send(ClientEvent::Service(err)).ok();
+                    self.to_handle.send(ClientEvent::Service(err)).await.ok();
                 }
-                Err(err @ Error::Socket(_)) | Err(err @ Error::Channel(_)) => {
-                    self.to_handle.send(ClientEvent::Service(err)).ok();
+                Err(err @ Error::Socket(_)) | Err(err @ Error::Channel) => {
+                    self.to_handle.send(ClientEvent::Service(err)).await.ok();
                     break;
                 }
             }
         }
     }
 
-    fn run(&mut self) -> Result<(), Error> {
+    async fn run(&mut self) -> Result<(), Error> {
         use ServerEvent as Ev;
 
         loop {
-            match self.event_receiver.recv()? {
+            match self.event_receiver.recv().await.ok_or(Error::Channel)? {
                 // The handler request an inbound mapping
-                Ev::InboundMap { map, kind, id } => self.new_inbound(map, kind, id)?,
+                Ev::InboundMap { map, kind, id } => self.new_inbound(map, kind, id).await?,
                 // The handler request an outbound mapping
-                Ev::OutboundMap { map, kind, id } => self.new_outbound(map, kind, id)?,
+                Ev::OutboundMap { map, kind, id } => self.new_outbound(map, kind, id).await?,
                 // The relative handle of this mapping has been dropped or
                 // the handler requests to revoke a mapping
                 // NOTE:
@@ -331,7 +335,7 @@ impl<Ip: IpAddress> Client<Ip> {
                     // Send the packet with the 0 lifetime
                     let mut buffer = vec![0u8; mapping.request.size()];
                     mapping.request.copy_to(&mut buffer);
-                    self.socket.send(&buffer)?;
+                    self.socket.send(&buffer).await?;
 
                     mapping.state = State::Revoked;
                 }
@@ -343,21 +347,20 @@ impl<Ip: IpAddress> Client<Ip> {
                     mapping.request.header.lifetime = lifetime;
                     mapping.delay.ignore();
                     // Update the buffer and send the packet
-                    self.socket.send(mapping.bytes())?;
+                    self.socket.send(mapping.bytes()).await?;
 
                     mapping.state = State::Starting(0);
-                    mapping.delay =
-                        Delay::by(timeout::irt(&mut self.rng), id, self.event_source.clone());
+                    mapping.delay = Delay::by(timeout::irt(), id, self.event_source.clone());
                 }
                 // A delay has ended
-                Ev::Delay(id, waited) => self.delay_expired(id, waited)?,
-                Ev::ServerResponse(when, packet) => self.server_response(packet, when)?,
+                Ev::Delay(id, waited) => self.delay_expired(id, waited).await?,
+                Ev::ServerResponse(when, packet) => self.server_response(packet, when).await?,
                 Ev::Shutdown => return Ok(()),
             }
         }
     }
 
-    fn new_mapping(
+    async fn new_mapping(
         &mut self,
         request: RequestPacket,
         kind: RequestKind,
@@ -369,14 +372,10 @@ impl<Ip: IpAddress> Client<Ip> {
         let new_id = self.next_index();
         if new_id != id {
             let ev = ClientEvent::Map(MapEvent::new(id, MapEventKind::NewId(new_id)));
-            self.to_handle.send(ev).ok();
+            self.to_handle.send(ev).await.ok();
         }
 
-        let delay = Delay::by(
-            timeout::irt(&mut self.rng),
-            new_id,
-            self.event_source.clone(),
-        );
+        let delay = Delay::by(timeout::irt(), new_id, self.event_source.clone());
         // Construct the mapping
         let mapping = MappingState::new(request, delay, kind);
 
@@ -385,7 +384,7 @@ impl<Ip: IpAddress> Client<Ip> {
         Ok(())
     }
 
-    fn new_inbound(
+    async fn new_inbound(
         &mut self,
         map: InboundMap<Ip>,
         kind: RequestKind,
@@ -415,7 +414,7 @@ impl<Ip: IpAddress> Client<Ip> {
             2,
             map.lifetime,
             self.addr.to_ipv6(),
-            self.rng.gen(),
+            rand::thread_rng().gen(),
             map.protocol,
             map.internal_port,
             map.external_port.unwrap_or(0),
@@ -424,11 +423,11 @@ impl<Ip: IpAddress> Client<Ip> {
         )
         .unwrap();
 
-        self.new_mapping(request, kind, id)?;
+        self.new_mapping(request, kind, id).await?;
         Ok(())
     }
 
-    fn new_outbound(
+    async fn new_outbound(
         &mut self,
         map: OutboundMap<Ip>,
         kind: RequestKind,
@@ -445,7 +444,7 @@ impl<Ip: IpAddress> Client<Ip> {
             2,
             map.lifetime,
             self.addr.to_ipv6(),
-            self.rng.gen(),
+            rand::thread_rng().gen(),
             map.protocol,
             map.internal_port,
             map.external_port.unwrap_or(0),
@@ -456,11 +455,11 @@ impl<Ip: IpAddress> Client<Ip> {
         )
         .unwrap();
 
-        self.new_mapping(request, kind, id)?;
+        self.new_mapping(request, kind, id).await?;
         Ok(())
     }
 
-    fn delay_expired(&mut self, id: usize, waited: Duration) -> Result<(), Error> {
+    async fn delay_expired(&mut self, id: usize, waited: Duration) -> Result<(), Error> {
         let mapping = &mut self.mappings[id];
         match mapping.state {
             State::Starting(n) if n == timeout::MRC => {
@@ -472,30 +471,26 @@ impl<Ip: IpAddress> Client<Ip> {
             // TODO: manage the MRD timeout
             State::Starting(n) => {
                 mapping.state = State::Starting(n + 1);
-                self.socket.send(mapping.bytes())?;
+                self.socket.send(mapping.bytes()).await?;
                 // Restart the timer
-                mapping.delay = Delay::by(
-                    timeout::rt(&mut self.rng, waited),
-                    id,
-                    self.event_source.clone(),
-                );
+                mapping.delay = Delay::by(timeout::rt(waited), id, self.event_source.clone());
             }
             // If it's running it means that the lifetime has ended
             State::Running => match mapping.kind {
                 RequestKind::Repeat(0) => mapping.state = State::Expired,
                 RequestKind::Repeat(n) => {
                     mapping.kind = RequestKind::Repeat(n - 1);
-                    self.update_mapping(id, 0)?;
+                    self.update_mapping(id, 0).await?;
                 }
-                RequestKind::KeepAlive => self.update_mapping(id, 0)?,
+                RequestKind::KeepAlive => self.update_mapping(id, 0).await?,
             },
-            State::Updating(n, _) => self.update_mapping(id, n + 1)?,
+            State::Updating(n, _) => self.update_mapping(id, n + 1).await?,
             _ => (),
         }
         Ok(())
     }
 
-    fn mapping_response(
+    async fn mapping_response(
         &mut self,
         packet: ResponsePacket,
         addr: Ipv6Addr,
@@ -541,7 +536,7 @@ impl<Ip: IpAddress> Client<Ip> {
             let wait = match mapping.kind {
                 RequestKind::Repeat(0) => Duration::from_secs(m_lifetime as u64),
                 RequestKind::KeepAlive | RequestKind::Repeat(_) => {
-                    timeout::renew(&mut self.rng, mapping.rem, 0).unwrap_or_default()
+                    timeout::renew(mapping.rem, 0).unwrap_or_default()
                 }
             };
             mapping.renew = wait;
@@ -551,18 +546,22 @@ impl<Ip: IpAddress> Client<Ip> {
         Ok(())
     }
 
-    fn server_response(&mut self, packet: ResponsePacket, when: Instant) -> Result<(), Error> {
+    async fn server_response(
+        &mut self,
+        packet: ResponsePacket,
+        when: Instant,
+    ) -> Result<(), Error> {
         use ResponsePayload::*;
 
         let curr_epoch = Epoch::new_when(packet.header.epoch, when);
-        if !self.validate_epoch(curr_epoch)? {
+        if !self.validate_epoch(curr_epoch).await? {
             return Ok(());
         }
         match packet.payload {
             // Announce error responses shouldn't even be sent, but if one still arrives
             // it gets ignored
             Announce if packet.header.result != ResultCode::Success => (),
-            Announce => self.server_lost_state()?,
+            Announce => self.server_lost_state().await?,
             Map(MapResponsePayload {
                 external_addr: addr,
                 external_port: port,
@@ -572,40 +571,40 @@ impl<Ip: IpAddress> Client<Ip> {
                 external_addr: addr,
                 external_port: port,
                 ..
-            }) => self.mapping_response(packet, addr, port)?,
+            }) => self.mapping_response(packet, addr, port).await?,
         };
         Ok(())
     }
 
-    fn listen(socket: UdpSocket, to_client: mpsc::Sender<ServerEvent<Ip>>) {
+    async fn listen(socket: Arc<UdpSocket>, to_client: mpsc::Sender<ServerEvent<Ip>>) {
         let mut buf = [0; MAX_PACKET_SIZE];
-        std::thread::spawn(move || loop {
-            let response = socket.recv(&mut buf).map_err(Error::from);
+        loop {
+            let response = socket.recv(&mut buf).await.map_err(Error::from);
             let _ = match response.and_then(|bytes| Ok(buf[..bytes].try_into()?)) {
                 Ok(packet) => to_client.send(ServerEvent::ServerResponse(Instant::now(), packet)),
                 Err(_) => todo!(),
             };
-        });
+        }
     }
 
     /// Starts the PCP client and returns it's [`Handle`] which is used to request mappings.
-    pub fn start(client: Ip, server: Ip) -> io::Result<Handle<Ip>> {
+    pub async fn start(client: Ip, server: Ip) -> io::Result<Handle<Ip>> {
         let server_sockaddr = server.to_sockaddr(UNICAST_PORT);
 
-        let client_socket = UdpSocket::bind(client.to_sockaddr(0))?;
-        client_socket.connect(&server_sockaddr)?;
+        let client_socket = Arc::new(UdpSocket::bind(client.to_sockaddr(0)).await?);
+        client_socket.connect(&server_sockaddr).await?;
         // One part will be used only for sending, the other only for receiving
-        let server_socket = client_socket.try_clone()?;
+        let server_socket = client_socket.clone();
 
-        let (to_handle, from_client) = mpsc::channel();
+        let (to_handle, from_client) = mpsc::channel(Self::MAX_PENDING_SERVER_EVENTS);
         let tx = Client::open(client_socket, client, to_handle);
 
-        let announce_socket = UdpSocket::bind(Ip::ALL_NODES.to_sockaddr(MULTICAST_PORT))?;
+        let announce_socket = UdpSocket::bind(Ip::ALL_NODES.to_sockaddr(MULTICAST_PORT)).await?;
         Ip::ALL_NODES.join_muliticast_group(&announce_socket)?;
-        announce_socket.connect(server_sockaddr)?;
+        announce_socket.connect(server_sockaddr).await?;
 
-        Self::listen(announce_socket, tx.clone());
-        Self::listen(server_socket, tx.clone());
+        tokio::spawn(Self::listen(Arc::new(announce_socket), tx.clone()));
+        tokio::spawn(Self::listen(server_socket, tx.clone()));
 
         Ok(Handle::new(tx, from_client))
     }

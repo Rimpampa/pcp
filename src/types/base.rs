@@ -104,43 +104,33 @@ pub struct RequestHeader {
 }
 
 impl RequestHeader {
-    /// Size of the PCP request header (in bytes)
+    /// Size of the PCP [RequestHeader] (in bytes)
     pub const SIZE: usize = 24;
 
-    /// Constructs a new [RequestHeader]
-    pub fn new(version: u8, opcode: OpCode, lifetime: u32, address: Ipv6Addr) -> Self {
-        Self {
-            version,
-            opcode,
-            lifetime,
-            address,
-        }
-    }
-
-    /// Constructs a new PCP map request header
+    /// Constructs a new PCP *map* [RequestHeader]
     pub fn map(version: u8, lifetime: u32, address: Ipv6Addr) -> Self {
         Self {
-            version: 2,
+            version,
             address,
             lifetime,
             opcode: OpCode::Map,
         }
     }
 
-    /// Constructs a new PCP peer request header
+    /// Constructs a new PCP *peer* [RequestHeader]
     pub fn peer(version: u8, lifetime: u32, address: Ipv6Addr) -> Self {
         Self {
-            version: 2,
+            version,
             address,
             lifetime,
             opcode: OpCode::Peer,
         }
     }
 
-    /// Constructs a new PCP announce request header
+    /// Constructs a new PCP *announce* [RequestHeader]
     pub fn announce(version: u8, address: Ipv6Addr) -> Self {
         Self {
-            version: 2,
+            version,
             address,
             lifetime: 0,
             opcode: OpCode::Peer,
@@ -709,8 +699,6 @@ pub struct FilterOptionPayload {
 }
 
 impl FilterOptionPayload {
-    pub const CODE: OptionCode = OptionCode::Filter;
-
     pub const SIZE: usize = 20;
 
     pub fn size(&self) -> usize {
@@ -811,8 +799,6 @@ impl TryFrom<&[u8]> for ThirdPartyOptionPayload {
 pub struct PreferFailureOptionPayload {}
 
 impl PreferFailureOptionPayload {
-    const CODE: OptionCode = OptionCode::PreferFailure;
-
     const SIZE: usize = 0;
 
     pub fn size(&self) -> usize {
@@ -852,7 +838,17 @@ mod tests {
         h.copy_to(b);
         assert_eq!(Ok(h), b.as_ref().try_into());
 
-        let h = RequestHeader::new(2, Announce, 10, "::1".parse().unwrap());
+        let h = RequestHeader::announce(2, "::1".parse().unwrap());
+        let b = &mut [0; RequestHeader::SIZE];
+        h.copy_to(b);
+        assert_eq!(Ok(h), b.as_ref().try_into());
+
+        let h = RequestHeader::map(2, 10, "::1".parse().unwrap());
+        let b = &mut [0; RequestHeader::SIZE];
+        h.copy_to(b);
+        assert_eq!(Ok(h), b.as_ref().try_into());
+
+        let h = RequestHeader::peer(2, 10, "::1".parse().unwrap());
         let b = &mut [0; RequestHeader::SIZE];
         h.copy_to(b);
         assert_eq!(Ok(h), b.as_ref().try_into());

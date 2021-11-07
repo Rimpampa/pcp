@@ -85,6 +85,7 @@ mod state;
 pub mod types;
 
 pub use client::Client;
+pub use event::{ClientEvent, MapEvent, MapEventKind};
 pub use handle::{Error, Handle, RequestKind};
 pub use map::{InboundMap, Map, OutboundMap};
 pub use state::{Alert, State};
@@ -92,8 +93,9 @@ pub use types::ProtocolNumber;
 
 use std::{
     io,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, ToSocketAddrs, UdpSocket},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
 };
+use tokio::net::{ToSocketAddrs, UdpSocket};
 
 /// Common trait for IPv4 and IPv6 addresses
 pub trait IpAddress: std::fmt::Debug + Send + Copy + Into<IpAddr> + 'static {
@@ -129,7 +131,7 @@ impl IpAddress for Ipv4Addr {
     }
 
     fn join_muliticast_group(&self, sock: &UdpSocket) -> io::Result<()> {
-        sock.join_multicast_v4(self, &Self::UNSPECIFIED)
+        sock.join_multicast_v4(*self, Self::UNSPECIFIED)
     }
 }
 

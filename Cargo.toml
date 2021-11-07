@@ -1,8 +1,14 @@
 [package]
+authors = ["Rimpampa <riccardo.ripanti01@gmail.com>"]
+edition = "2021"
 name = "pcp"
 version = "0.1.0"
-authors = ["Rimpampa <riccardo.ripanti01@gmail.com>"]
-edition = "2018"
-
 [dependencies]
-rand = "0.7.3"
+rand = "0.8.4"
+
+[dependencies.tokio]
+features = ["time", "sync", "rt", "macros", "net"]
+version = "1"
+
+[dev-dependencies.tokio]
+features = ["rt-multi-thread"]

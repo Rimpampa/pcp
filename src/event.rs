@@ -2,9 +2,8 @@ use super::handle::Error;
 use super::map::{InboundMap, OutboundMap};
 use crate::types::ResponsePacket;
 use crate::{IpAddress, RequestKind};
-use std::sync::mpsc;
-use std::thread;
 use std::time::{Duration, Instant};
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug)]
 /// Events that a PCP has to process
@@ -37,7 +36,7 @@ pub enum ServerEvent<Ip: IpAddress> {
 
 /// An handle to a waiting thread: one the thread wait ends an event is sent
 pub struct Delay {
-    signal: Option<mpsc::Sender<()>>,
+    signal: Option<oneshot::Sender<()>>,
 }
 
 impl Delay {
@@ -48,11 +47,11 @@ impl Delay {
         id: usize,
         channel: mpsc::Sender<ServerEvent<Ip>>,
     ) -> Self {
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            thread::sleep(time);
+        let (tx, mut rx) = oneshot::channel();
+        tokio::spawn(async move {
+            tokio::time::sleep(time).await;
             if rx.try_recv().is_err() {
-                channel.send(ServerEvent::Delay(id, time)).ok();
+                let _ = channel.send(ServerEvent::Delay(id, time)).await;
             }
         });
         Self { signal: Some(tx) }
