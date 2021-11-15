@@ -238,12 +238,12 @@ impl TryFrom<&[u8]> for ResponseHeader {
         if s[0] != 2 {
             return Err(ParsingError::VersionNotSupported(s[0]));
         }
-        if s[1] & 0b10000000 > 0 {
+        if s[1] & 0b10000000 == 0 {
             return Err(ParsingError::NotAResponse);
         }
         Ok(Self {
             version: s[0],
-            opcode: s[1].try_into()?,
+            opcode: (s[1] & 0b01111111).try_into()?,
             result: s[3].try_into()?,
             lifetime: get(&s[4..8]),
             epoch: get(&s[8..12]),
