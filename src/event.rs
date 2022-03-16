@@ -2,8 +2,10 @@ use super::handle::Error;
 use super::map::{InboundMap, OutboundMap};
 use crate::types::ResponsePacket;
 use crate::{IpAddress, RequestKind};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 #[derive(Debug)]
 /// Events that a PCP has to process
@@ -36,7 +38,7 @@ pub enum ServerEvent<Ip: IpAddress> {
 
 /// An handle to a waiting thread: one the thread wait ends an event is sent
 pub struct Delay {
-    signal: Option<oneshot::Sender<()>>,
+    signal: Arc<AtomicBool>,
 }
 
 impl Delay {
@@ -47,24 +49,26 @@ impl Delay {
         id: usize,
         channel: mpsc::Sender<ServerEvent<Ip>>,
     ) -> Self {
-        let (tx, mut rx) = oneshot::channel();
+        let signal = Arc::new(AtomicBool::new(true));
+        let cloned = Arc::clone(&signal);
         tokio::spawn(async move {
             tokio::time::sleep(time).await;
-            if rx.try_recv().is_err() {
+            if cloned.load(Ordering::Relaxed) {
                 let _ = channel.send(ServerEvent::Delay(id, time)).await;
             }
         });
-        Self { signal: Some(tx) }
+        Self { signal }
     }
-    /// Once called, the event won't be sent through the channel (thus ignoring it).
-    /// If the event was already sent at the time of calling the method, or any other error
-    /// happens, `false` will be returned. Only when the delay gets truly ignored `true` will be
-    /// returned
-    pub fn ignore(&mut self) -> bool {
-        self.signal
-            .take()
-            .map(|channel| matches!(channel.send(()), Ok(_)))
-            .unwrap_or(false)
+
+    /// Ignores this delay, once
+    pub fn ignore(&mut self) {
+        self.signal.store(false, Ordering::Relaxed);
+    }
+}
+
+impl Drop for Delay {
+    fn drop(&mut self) {
+        self.ignore()
     }
 }
 
