@@ -320,9 +320,17 @@ impl PartialEq<RequestPacket> for ResponsePacket {
         let check_payload = match (&self.payload, &other.payload) {
             (Res::Announce, Req::Announce) => true,
             (Res::Map(res), Req::Map(req)) => {
-                // Do not check the external address as the server can choose anything
-                res.protocol == req.protocol
-                    && (res.external_port == req.external_port || req.external_port == 0)
+                /*
+                    After performing common PCP response processing, the response is
+                    further matched with a previously sent MAP request by comparing the
+                    internal IP address (the destination IP address of the PCP response,
+                    or other IP address specified via the THIRD_PARTY option), the
+                    protocol, the internal port, and the mapping nonce.  Other fields are
+                    not compared, because the PCP server sets those fields.  The PCP
+                    server will send a Mapping Update (Section 14.2) if the mapping
+                    changes (e.g., due to IP renumbering).
+                */
+                (res.protocol == req.protocol || res.protocol == ProtocolNumber::Hopopt)
                     && res.internal_port == req.internal_port
                     && res.nonce == req.nonce
             }
