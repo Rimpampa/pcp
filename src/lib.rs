@@ -13,9 +13,9 @@
 //! To start requesting mappings you first have to start the `Client` and get an
 //! `Handle` to it. Once you have the `Handle` you can start creating requests.
 //!
-//! ```rust
-//! use std::net::Ipv4Addr;
-//!
+//! ```
+//! # use pcp::*;
+//! # use std::net::Ipv4Addr;
 //! // This is the address of your host in your local network
 //! let pcp_client = Ipv4Addr::new(192, 168, 1, 101);
 //!
@@ -23,7 +23,9 @@
 //! let pcp_server = Ipv4Addr::new(192, 168, 1, 1);
 //!
 //! // Start the PCP client service
-//! let handle = Client::<Ipv4Addr>::start(pcp_client, pcp_server).unwrap();
+//! let mut client = Client::<Ipv4Addr>::start(pcp_client, pcp_server).unwrap();
+//! # let mapping = InboundMap::new(6000, 20).protocol(ProtocolNumber::Tcp);
+//! # client.request(1, mapping, RequestKind::KeepAlive);
 //! ```
 //!
 //! There are two types of mappings you can request: `InboundMapping`s and
@@ -31,11 +33,17 @@
 //! contructed with the `new` method and support a various number of options that
 //! can be added with chaining methods.
 //!
-//! ```rust
+//! ```
+//! # use pcp::*;
+//! # use std::net::Ipv4Addr;
+//! # let pcp_client = Ipv4Addr::new(192, 168, 1, 101);
+//! # let pcp_server = Ipv4Addr::new(192, 168, 1, 1);
+//! # let mut client = Client::<Ipv4Addr>::start(pcp_client, pcp_server).unwrap();
 //! // This allows any host from outside the local network to send requests to
 //! // your computer using the TCP protocol on the port 6000.
 //! // Once requested, it will last for 20 seconds
 //! let mapping = InboundMap::new(6000, 20).protocol(ProtocolNumber::Tcp);
+//! # client.request(1, mapping, RequestKind::KeepAlive);
 //! ```
 //!
 //! After you have a mapping you can request it by calling the `request` method on
@@ -46,13 +54,20 @@
 //! used to control the mapping and, also, to check its state.
 //!
 //! ```rust
+//! # use pcp::*;
+//! # use std::net::Ipv4Addr;
+//! # let pcp_client = Ipv4Addr::new(192, 168, 1, 101);
+//! # let pcp_server = Ipv4Addr::new(192, 168, 1, 1);
+//! # let mut client = Client::<Ipv4Addr>::start(pcp_client, pcp_server).unwrap();
+//! # let mapping = InboundMap::new(6000, 20).protocol(ProtocolNumber::Tcp);
 //! // Request the mapping to the server and instruct the client to keeping
 //! // it alive for as long as I want
-//! let map_handle = handle.request(mapping, RequestType::KeepAlive);
+//! client.request(1, mapping, RequestKind::KeepAlive);
 //!
 //! // do stuff...
 //!
-//! map_handle.revoke(); // stop the mapping
+//! // NOTE: assuming the id din't change, check MapEventKind::NewId for more info
+//! client.revoke(1); // stop the mapping
 //! ```
 //!
 //! # Difference Between Mappings
@@ -85,14 +100,16 @@ mod state;
 pub mod types;
 
 pub use client::Client;
+pub use event::{ClientEvent, MapEvent, MapEventKind};
 pub use handle::{Error, Handle, RequestKind};
 pub use map::{InboundMap, Map, OutboundMap};
-pub use state::{Alert, State};
+pub use state::State;
 pub use types::ProtocolNumber;
 
+use std::net::{ToSocketAddrs, UdpSocket};
 use std::{
     io,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, ToSocketAddrs, UdpSocket},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
 };
 
 /// Common trait for IPv4 and IPv6 addresses

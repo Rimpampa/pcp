@@ -2,7 +2,7 @@
 name = "pcp"
 version = "0.1.0"
 authors = ["Rimpampa <riccardo.ripanti01@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 rand = "0.7.3"

@@ -3,14 +3,7 @@ use crate::{
     types::{RequestPacket, ResultCode, MAX_PACKET_SIZE},
     RequestKind,
 };
-use std::{net::IpAddr, time::Duration};
-
-/// A notitification sent when the state of a mapping changes
-/// or when the external address selected by the server is recieved
-pub enum Alert {
-    StateChange,
-    Assigned(IpAddr, u16, u32),
-}
+use std::time::Duration;
 
 /// The state of a mapping
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -83,36 +76,3 @@ impl MappingState {
         self.size = self.request.size()
     }
 }
-
-// /// An handle to a requested mapping
-// pub struct MapHandle<'a> {
-//     client: &'a Client,
-//     id: usize,
-// }
-
-// impl<'a> MapHandle<'a> {
-//     // /// Returns the state of the mapping
-//     // pub fn state(&self) -> State {
-//     //     self.state.get()
-//     // }
-
-//     // /// Requests to renew the mapping for the specified lifetime
-//     // pub fn renew(&self, lifetime: u32) {
-//     //     self.to_client.send(Event::Renew(self.id, lifetime)).ok();
-//     // }
-
-//     // /// Requests to revoke the mapping
-//     // pub fn revoke(&self) {
-//     //     self.to_client.send(Event::Revoke(self.id)).ok();
-//     // }
-
-//     // /// Waits for an alert to arrive
-//     // pub fn wait_alert(&self) -> Result<Alert, RecvError> {
-//     //     self.from_client.recv()
-//     // }
-
-//     // /// Returns the first alert received if there is one
-//     // pub fn poll_alert(&self) -> Option<Alert> {
-//     //     self.from_client.try_recv().ok()
-//     // }
-// }
