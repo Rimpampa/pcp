@@ -19,7 +19,7 @@ pub struct Filter<Ip: IpAddress> {
 pub struct InboundMap<Ip: IpAddress> {
     pub(crate) lifetime: u32,
     pub(crate) internal_port: u16,
-    pub(crate) protocol: Option<ProtocolNumber>,
+    pub(crate) protocol: ProtocolNumber,
     pub(crate) third_party: Option<Ip>,
     pub(crate) external_port: Option<u16>,
     pub(crate) external_addr: Option<Ip>,
@@ -34,7 +34,7 @@ impl<Ip: IpAddress> InboundMap<Ip> {
         Self {
             lifetime,
             internal_port,
-            protocol: None,
+            protocol: ProtocolNumber::Hopopt,
             third_party: None,
             external_port: None,
             external_addr: None,
@@ -46,7 +46,7 @@ impl<Ip: IpAddress> InboundMap<Ip> {
     /// Specifies a specific protocol to be used
     pub fn protocol(self, number: ProtocolNumber) -> Self {
         Self {
-            protocol: Some(number),
+            protocol: number,
             ..self
         }
     }
@@ -107,7 +107,7 @@ pub struct OutboundMap<Ip: IpAddress> {
     pub(crate) internal_port: u16,
     pub(crate) remote_addr: Ip,
     pub(crate) remote_port: u16,
-    pub(crate) protocol: Option<ProtocolNumber>,
+    pub(crate) protocol: ProtocolNumber,
     pub(crate) third_party: Option<Ip>,
     pub(crate) external_port: Option<u16>,
     pub(crate) external_addr: Option<Ip>,
@@ -121,7 +121,7 @@ impl<Ip: IpAddress> OutboundMap<Ip> {
             internal_port,
             remote_addr,
             remote_port,
-            protocol: None,
+            protocol: ProtocolNumber::Hopopt,
             third_party: None,
             external_port: None,
             external_addr: None,
@@ -131,7 +131,7 @@ impl<Ip: IpAddress> OutboundMap<Ip> {
     /// Specifies a specific protocol to be used
     pub fn protocol(self, number: ProtocolNumber) -> Self {
         Self {
-            protocol: Some(number),
+            protocol: number,
             ..self
         }
     }
