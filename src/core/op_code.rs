@@ -1,11 +1,13 @@
-use super::{OptionCode, ParsingError};
-use std::convert::TryFrom;
+use super::{util, Error, OptionCode};
 
-/// The op code field contained in the PCP response and request headers.
+/// The PCP operation
 ///
-/// _On requests_: it indicates the operation that the server has to perform.
+/// This enum represents the possible values of the
+/// `Opcode` field in PCP repsonse and request headers.
 ///
-/// _On responses_: it's the same of the request it's responding to.
+/// In requests this field indicates the operation to perform
+/// while in responses it is used to know to which operation
+/// it's referring.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OpCode {
     Announce = 0,
@@ -14,7 +16,11 @@ pub enum OpCode {
 }
 
 impl OpCode {
-    /// Returns the array containing all the valid option codes for this opcode
+    /// Return all the valid [`OptionCode`]s for this [`OpCode`]
+    ///
+    /// Some options can never appear in some specific [`OpCode`]s,
+    /// the slice returned by this function can be used to validate
+    /// PCP requests and responses.
     pub const fn valid_options(&self) -> &'static [OptionCode] {
         use OptionCode::*;
         match self {
@@ -24,21 +30,24 @@ impl OpCode {
         }
     }
 
-    /// Checks if the provided option code is valid for this opcode
+    /// Checks if the provided [`OptionCode`] is valid for this [`OpCode`]
+    ///
+    /// This is an utility function that uses the [`valid_option()`]
+    /// to simplify checking the validity of the option opcode pair.
     pub fn is_option_valid(&self, option: OptionCode) -> bool {
-        self.valid_options().iter().any(|&o| o == option)
+        self.valid_options().contains(&option)
     }
 }
 
 impl TryFrom<u8> for OpCode {
-    type Error = ParsingError;
+    type Error = Error;
 
-    fn try_from(val: u8) -> Result<Self, Self::Error> {
-        match val {
-            0 => Ok(Self::Announce),
-            1 => Ok(Self::Map),
-            2 => Ok(Self::Peer),
-            n => Err(ParsingError::NotAnOpCode(n)),
+    fn try_from(byte: u8) -> util::Result<Self> {
+        match byte {
+            0 => Ok(OpCode::Announce),
+            1 => Ok(OpCode::Map),
+            2 => Ok(OpCode::Peer),
+            n => Err(Error::InvalidOpCode(n)),
         }
     }
 }
