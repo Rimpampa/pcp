@@ -34,6 +34,9 @@ pub use error::Error;
 mod op_code;
 pub use op_code::OpCode;
 
+mod epoch;
+pub use epoch::Epoch;
+
 /// Maximum size a PCP UDP packet can have
 pub const MAX_PACKET_SIZE: usize = 1100;
 
