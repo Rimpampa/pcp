@@ -166,7 +166,7 @@ impl RequestPacket {
         lifetime: u32,
         internal_addr: Ipv6Addr,
         nonce: [u8; 12],
-        protocol: Option<ProtocolNumber>,
+        protocol: ProtocolNumber,
         internal_port: u16,
         external_port: u16,
         external_addr: Ipv6Addr,
@@ -183,8 +183,13 @@ impl RequestPacket {
         if version < 2 {
             return Err(ParsingError::VersionNotSupported(version));
         }
-        let payload =
-            MapRequestPayload::new(nonce, protocol, internal_port, external_port, external_addr);
+        let payload = MapRequestPayload {
+            nonce,
+            protocol,
+            internal_port,
+            external_port,
+            external_addr,
+        };
 
         Self {
             header: RequestHeader::map(version, lifetime, internal_addr),
@@ -200,7 +205,7 @@ impl RequestPacket {
         lifetime: u32,
         internal_addr: Ipv6Addr,
         nonce: [u8; 12],
-        protocol: Option<ProtocolNumber>,
+        protocol: ProtocolNumber,
         internal_port: u16,
         external_port: u16,
         external_addr: Ipv6Addr,
@@ -219,7 +224,7 @@ impl RequestPacket {
         if version < 2 {
             return Err(ParsingError::VersionNotSupported(version));
         }
-        let payload = PeerRequestPayload::new(
+        let payload = PeerRequestPayload {
             nonce,
             protocol,
             internal_port,
@@ -227,7 +232,7 @@ impl RequestPacket {
             external_addr,
             remote_port,
             remote_addr,
-        );
+        };
         Self {
             header: RequestHeader::peer(version, lifetime, internal_addr),
             payload: RequestPayload::Peer(payload),

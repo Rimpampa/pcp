@@ -446,25 +446,6 @@ impl MapRequestPayload {
     /// Size of the PCP map request payload (in bytes)
     pub const SIZE: usize = 36;
 
-    /// Creates a new map request payload. If the external port is not known use 0, same goes for
-    /// the external address, if it's not known use the UNSPECIFIED address of the relative version
-    pub fn new(
-        nonce: [u8; 12],
-        protocol: Option<ProtocolNumber>,
-        internal_port: u16,
-        external_port: u16,
-        external_addr: Ipv6Addr,
-    ) -> Self {
-        MapRequestPayload {
-            nonce,
-            // Hoptop is number zero which also means "all" or "any"
-            protocol: protocol.unwrap_or(ProtocolNumber::Hopopt),
-            internal_port,
-            external_port,
-            external_addr,
-        }
-    }
-
     pub fn size(&self) -> usize {
         Self::SIZE
     }
@@ -614,29 +595,6 @@ pub struct PeerRequestPayload {
 impl PeerRequestPayload {
     /// Size of the PCP peer request payload (in bytes)
     pub const SIZE: usize = 56;
-
-    /// Creates a new peer request payload. If the _external_port_ is not known use 0, same goes for
-    /// the _external_address_, if it's not known use the `UNSPECIFIED` address of the relative version.
-    pub fn new(
-        nonce: [u8; 12],
-        protocol: Option<ProtocolNumber>,
-        internal_port: u16,
-        external_port: u16,
-        external_addr: Ipv6Addr,
-        remote_port: u16,
-        remote_addr: Ipv6Addr,
-    ) -> Self {
-        PeerRequestPayload {
-            nonce,
-            // Hoptop is number zero which also means "all" or "any"
-            protocol: protocol.unwrap_or(ProtocolNumber::Hopopt),
-            internal_port,
-            external_port,
-            external_addr,
-            remote_port,
-            remote_addr,
-        }
-    }
 
     pub fn size(&self) -> usize {
         Self::SIZE
