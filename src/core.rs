@@ -48,6 +48,9 @@ pub use protocols::ProtocolNumber;
 
 mod util;
 
+pub mod option;
+pub use option::Option;
+
 /// Maximum size a PCP UDP packet can have
 pub const MAX_PACKET_SIZE: usize = 1100;
 
