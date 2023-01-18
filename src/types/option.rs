@@ -1,0 +1,271 @@
+use std::net::Ipv6Addr;
+
+use super::{util, Error, OptionCode};
+use util::{Deserialize, Serialize};
+
+/// PCP filter option payload
+///
+/// # Format
+///
+/// ```plain
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | Option Code=3 |  Reserved     |   Option Length=20            |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |    Reserved   | Prefix Length |      Remote Peer Port         |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// |               Remote Peer IP address (128 bits)               |
+/// |                                                               |
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(PartialEq, Debug)]
+pub struct Filter {
+    /// Indicates how many bits of the IPv4 or IPv6 address are relevant for this filter
+    ///
+    /// The value 0 indicates "no filter", and will remove all previous filters
+    pub prefix_length: u8,
+    /// The port number of the remote peer
+    ///
+    /// The value 0 indicates "all ports"
+    pub remote_peer_port: u16,
+    /// The IP address of the remote peer.
+    pub remote_peer_addr: Ipv6Addr,
+}
+
+impl Filter {
+    /// The [`OptionCode`] of the [`Filter`] PCP option
+    pub const CODE: OptionCode = OptionCode::Filter;
+
+    /// Value of the *length* field in the header of every [`Filter`] PCP option
+    pub const LENGTH: u16 = 20;
+}
+
+impl Serialize for Filter {
+    fn se(&self, data: &mut [u8]) {
+        let data: &mut [_; Self::LENGTH as usize] = util::sized_mut(data).unwrap();
+        data[0] = 0;
+        data[1] = self.prefix_length;
+        self.remote_peer_port.se(&mut data[2..4]);
+        self.remote_peer_addr.se(&mut data[4..20]);
+    }
+}
+
+impl TryFrom<&[u8]> for Filter {
+    type Error = Error;
+
+    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
+        let data: &[_; Self::LENGTH as usize] = util::sized_ref(data)?;
+        if let [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, _, _, _, _] = data[4..20] {
+            if data[1] < 96 {
+                return Err(Error::InvalidPrefix(data[1]));
+            }
+        }
+        Ok(Self {
+            prefix_length: data[1],
+            remote_peer_port: data[2..4].de(),
+            remote_peer_addr: data[4..20].de(),
+        })
+    }
+}
+
+/// PCP third party option payload
+///
+/// # Format
+///
+/// ```plain
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | Option Code=1 |  Reserved     |   Option Length=16            |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// |                Internal IP Address (128 bits)                 |
+/// |                                                               |
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(PartialEq, Debug)]
+pub struct ThirdParty {
+    /// Internal IP address for this mapping
+    pub internal_addr: Ipv6Addr,
+}
+
+impl ThirdParty {
+    /// The [`OptionCode`] of the [`ThirdParty`] PCP option
+    pub const CODE: OptionCode = OptionCode::ThirdParty;
+
+    /// Value of the *length* field in the header of every [`ThirdParty`] PCP option
+    pub const LENGTH: u16 = 16;
+}
+
+impl Serialize for ThirdParty {
+    fn se(&self, data: &mut [u8]) {
+        let data: &mut [_; Self::LENGTH as usize] = util::sized_mut(data).unwrap();
+        self.internal_addr.se(&mut data[..]);
+    }
+}
+
+impl TryFrom<&[u8]> for ThirdParty {
+    type Error = Error;
+
+    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
+        let data: &[_; Self::LENGTH as usize] = util::sized_ref(data)?;
+        Ok(Self {
+            internal_addr: data.de(),
+        })
+    }
+}
+
+/// PCP prefer failure option payload
+///
+/// # Format
+///
+/// ```plain
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | Option Code=2 |  Reserved     |   Option Length=0             |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(PartialEq, Debug)]
+pub struct PreferFailure;
+
+impl PreferFailure {
+    /// The [`OptionCode`] of the [`PreferFailure`] PCP option
+    pub const CODE: OptionCode = OptionCode::PreferFailure;
+
+    /// Value of the *length* field in the header of every [`PreferFailure`] PCP option
+    pub const LENGTH: u16 = 0;
+}
+
+impl Serialize for PreferFailure {
+    fn se(&self, out: &mut [u8]) {}
+}
+
+impl TryFrom<&[u8]> for PreferFailure {
+    type Error = Error;
+
+    fn try_from(_: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self {})
+    }
+}
+
+/// PCP option
+///
+/// PCP options extend the contents of a PCP packet by
+/// specifying special beheviours which is not always needed.
+///
+///
+///
+/// # Format
+///
+/// ```plain
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |  Option Code  |  Reserved     |       Option Length           |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// :                       (optional) Data                         :
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(PartialEq, Debug)]
+pub enum Option {
+    Filter(Filter),
+    ThirdParty(ThirdParty),
+    PreferFailure(PreferFailure),
+}
+
+impl Option {
+    /// Size of the PCP option header (in bytes)
+    pub const HEADER_SIZE: usize = 4;
+
+    /// Returns the [`OptionCode`] of this [`Option`]
+    pub const fn option_code(&self) -> OptionCode {
+        match self {
+            Self::Filter(_) => Filter::CODE,
+            Self::ThirdParty(_) => ThirdParty::CODE,
+            Self::PreferFailure(_) => PreferFailure::CODE,
+        }
+    }
+
+    /// Returns the length of the payload of this [`Option`]
+    ///
+    /// This is equivalent to the `Option Length` field of the
+    /// PCP option header.
+    ///
+    /// This field reflects the semantic length of the option,
+    /// not including any padding octets.
+    ///
+    /// The padding can be computed by rounding this value to the
+    /// next multiple of 4:
+    /// ```ignore
+    /// option.length() + option.length() % 4
+    /// ```
+    pub const fn length(&self) -> u16 {
+        match self {
+            Self::Filter(_) => Filter::LENGTH,
+            Self::ThirdParty(_) => ThirdParty::LENGTH,
+            Self::PreferFailure(_) => PreferFailure::LENGTH,
+        }
+    }
+}
+
+impl Serialize for Option {
+    fn se(&self, data: &mut [u8]) {
+        let header: &mut [_; Self::HEADER_SIZE] = util::sized_mut(data).unwrap();
+        header[0] = self.option_code() as u8;
+        header[1] = 0;
+        self.length().se(&mut header[2..4]);
+        let payload = &mut data[Self::HEADER_SIZE..];
+        match self {
+            Option::Filter(p) => p.se(payload),
+            Option::ThirdParty(p) => p.se(payload),
+            Option::PreferFailure(p) => p.se(payload),
+        }
+    }
+}
+
+impl TryFrom<&[u8]> for Option {
+    type Error = Error;
+
+    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
+        let header: &[_; Self::HEADER_SIZE] = util::sized_ref(data)?;
+        let code = header[0].try_into()?;
+        let length: u16 = header[2..4].de();
+        let check = match code {
+            OptionCode::Filter => Filter::LENGTH,
+            OptionCode::ThirdParty => ThirdParty::LENGTH,
+            OptionCode::PreferFailure => PreferFailure::LENGTH,
+        };
+        if length != check as u16 {
+            return Err(Error::InvalidOptionLength(code, length as usize));
+        }
+        let payload = &data[Self::HEADER_SIZE..];
+        Ok(match code {
+            OptionCode::ThirdParty => Self::ThirdParty(payload.try_into()?),
+            OptionCode::PreferFailure => Self::PreferFailure(payload.try_into()?),
+            OptionCode::Filter => Self::Filter(payload.try_into()?),
+        })
+    }
+}
+
+impl From<Filter> for Option {
+    fn from(v: Filter) -> Self {
+        Self::Filter(v)
+    }
+}
+
+impl From<ThirdParty> for Option {
+    fn from(v: ThirdParty) -> Self {
+        Self::ThirdParty(v)
+    }
+}
+
+impl From<PreferFailure> for Option {
+    fn from(v: PreferFailure) -> Self {
+        Self::PreferFailure(v)
+    }
+}
