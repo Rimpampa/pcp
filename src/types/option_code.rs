@@ -1,4 +1,4 @@
-use super::ParsingError;
+use super::Error;
 use std::convert::TryFrom;
 
 /// The `OptionCode` field contained in the PCP option header (see `OptionHeader`)
@@ -16,14 +16,14 @@ pub enum OptionCode {
 }
 
 impl TryFrom<u8> for OptionCode {
-    type Error = ParsingError;
+    type Error = Error;
 
     fn try_from(val: u8) -> Result<Self, Self::Error> {
         match val {
             1 => Ok(Self::ThirdParty),
             2 => Ok(Self::PreferFailure),
             3 => Ok(Self::Filter),
-            n => Err(ParsingError::NotAnOptionCode(n)),
+            n => Err(Error::NotAnOptionCode(n)),
         }
     }
 }

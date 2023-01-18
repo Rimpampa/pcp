@@ -240,7 +240,7 @@ impl<Ip: IpAddress> Client<Ip> {
 
     /// Validate the epoch according to the previous one and time elapsed since then
     fn validate_epoch(&mut self, curr_epoch: Epoch) -> Result<bool, Error> {
-        let res = curr_epoch.validate_epoch(self.epoch);
+        let res = self.epoch.map(|epoch| curr_epoch.validate_epoch(epoch, todo!())).unwrap_or(false);
         match res {
             true => self.epoch = Some(curr_epoch),
             false => self.server_lost_state()?,
@@ -334,7 +334,7 @@ impl<Ip: IpAddress> Client<Ip> {
                     mapping.delay.ignore();
                     // Send the packet with the 0 lifetime
                     let mut buffer = vec![0u8; mapping.request.size()];
-                    mapping.request.copy_to(&mut buffer);
+                    mapping.request.serialize(&mut buffer);
                     self.socket.send(&buffer)?;
 
                     mapping.state = State::Revoked;
@@ -549,7 +549,7 @@ impl<Ip: IpAddress> Client<Ip> {
     fn server_response(&mut self, packet: ResponsePacket, when: Instant) -> Result<(), Error> {
         use ResponsePayload::*;
 
-        let curr_epoch = Epoch::new_when(packet.header.epoch, when);
+        let curr_epoch = todo!(); // Epoch::new_when(packet.header.epoch, when);
         if !self.validate_epoch(curr_epoch)? {
             return Ok(());
         }

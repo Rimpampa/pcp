@@ -1,4 +1,4 @@
-use super::ParsingError;
+use super::Error;
 use std::convert::TryFrom;
 use std::fmt;
 
@@ -109,7 +109,7 @@ impl fmt::Display for ResultCode {
 }
 
 impl TryFrom<u8> for ResultCode {
-    type Error = ParsingError;
+    type Error = Error;
 
     fn try_from(val: u8) -> Result<ResultCode, Self::Error> {
         use ResultCode::*;
@@ -129,7 +129,7 @@ impl TryFrom<u8> for ResultCode {
             11 => Ok(CannotProvideExternal),
             12 => Ok(AddressMismatch),
             13 => Ok(ExcessiveRemotePeers),
-            n => Err(ParsingError::NotAResultCode(n)),
+            n => Err(Error::NotAResultCode(n)),
         }
     }
 }

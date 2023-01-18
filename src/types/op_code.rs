@@ -1,4 +1,4 @@
-use super::{OptionCode, ParsingError};
+use super::{Error, OptionCode};
 use std::convert::TryFrom;
 
 /// The PCP operation
@@ -31,7 +31,7 @@ impl OpCode {
         }
     }
 
-    /// Checks if the provided [`OptionCode`]s for this [`OpCode`]
+    /// Checks if the provided [`OptionCode`] is valid for this [`OpCode`]
     ///
     /// This is an utility function that uses the [`valid_option()`]
     /// to simplify checking the validity of the option opcode pair.
@@ -41,14 +41,14 @@ impl OpCode {
 }
 
 impl TryFrom<u8> for OpCode {
-    type Error = ParsingError;
+    type Error = Error;
 
     fn try_from(val: u8) -> Result<Self, Self::Error> {
         match val {
             0 => Ok(Self::Announce),
             1 => Ok(Self::Map),
             2 => Ok(Self::Peer),
-            n => Err(ParsingError::NotAnOpCode(n)),
+            n => Err(Error::NotAnOpCode(n)),
         }
     }
 }

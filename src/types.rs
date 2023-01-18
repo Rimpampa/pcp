@@ -28,7 +28,9 @@
 //! and returns a `Result` that can lead to a `ParsingError` if the data is not
 //! valid
 
-mod base;
+mod util;
+mod payloads;
+mod headers;
 mod epoch;
 mod op_code;
 mod option_code;
@@ -36,13 +38,17 @@ mod packet;
 mod parsing_error;
 mod protocols;
 mod result_code;
+mod request;
+mod option;
+mod response;
 
-pub use base::*;
+pub use headers::*;
+pub use payloads::*;
 pub use epoch::Epoch;
 pub use op_code::OpCode;
 pub use option_code::OptionCode;
 pub use packet::*;
-pub use parsing_error::ParsingError;
+pub use parsing_error::Error;
 pub use protocols::ProtocolNumber;
 pub use result_code::ResultCode;
 

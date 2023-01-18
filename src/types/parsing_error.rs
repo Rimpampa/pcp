@@ -2,7 +2,7 @@ use super::{OpCode, OptionCode};
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ParsingError {
+pub enum Error {
     /// The parsed value (1st) is not an opcode
     NotAnOpCode(u8),
     /// The parsed value (1st) is not an option code
@@ -29,9 +29,9 @@ pub enum ParsingError {
     PacketTooBig(usize),
 }
 
-impl fmt::Display for ParsingError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use ParsingError::*;
+        use Error::*;
         match self {
             NotAnOpCode(c) => write!(f, "The value {} is not a valid opcode", c),
             NotAnOptionCode(c) => write!(f, "The value {} is not a valid option code", c),

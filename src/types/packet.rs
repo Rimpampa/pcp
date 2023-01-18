@@ -1,5 +1,5 @@
 use super::*;
-use crate::ProtocolNumber;
+use crate::{ProtocolNumber, types::util::Serialize};
 use std::{
     convert::{TryFrom, TryInto},
     net::Ipv6Addr,
@@ -78,7 +78,7 @@ impl PacketOption {
 }
 
 impl TryFrom<&[u8]> for PacketOption {
-    type Error = ParsingError;
+    type Error = Error;
 
     fn try_from(slice: &[u8]) -> Result<Self, Self::Error> {
         let header = OptionHeader::try_from(slice)?;
@@ -94,7 +94,6 @@ impl TryFrom<&[u8]> for PacketOption {
 
 // =========================================== REQUESTS ===========================================
 
-/// TODO
 #[derive(PartialEq, Debug)]
 pub enum RequestPayload {
     Map(MapRequestPayload),
@@ -122,9 +121,9 @@ pub struct RequestPacket {
 
 impl RequestPacket {
     /// PCP packets cannot be bigger than [`MAX_PACKET_SIZE`]
-    fn check_size(self) -> Result<Self, ParsingError> {
+    fn check_size(self) -> Result<Self, Error> {
         if self.size() > MAX_PACKET_SIZE {
-            return Err(ParsingError::PacketTooBig(self.size()));
+            return Err(Error::PacketTooBig(self.size()));
         }
         Ok(self)
     }
@@ -137,15 +136,15 @@ impl RequestPacket {
     }
 
     /// Fills the byte array with the request packet formatted correctly
-    pub fn copy_to(&self, mut s: &mut [u8]) {
+    pub fn serialize(&self, mut s: &mut [u8]) {
         assert!(s.len() >= self.size());
 
-        self.header.copy_to(&mut s);
+        self.header.serialize(&mut s);
         s = &mut s[self.header.size()..];
 
         match &self.payload {
-            RequestPayload::Map(p) => p.copy_to(s),
-            RequestPayload::Peer(p) => p.copy_to(s),
+            RequestPayload::Map(p) => p.se(s),
+            RequestPayload::Peer(p) => p.se(s),
             RequestPayload::Announce => (),
         };
         s = &mut s[self.payload.size()..];
@@ -153,8 +152,8 @@ impl RequestPacket {
         for option in &self.options {
             match &option.payload {
                 OptionPayload::PreferFailure => (),
-                OptionPayload::Filter(p) => p.copy_to(s),
-                OptionPayload::ThirdParty(p) => p.copy_to(s),
+                OptionPayload::Filter(p) => p.serialize(s),
+                OptionPayload::ThirdParty(p) => p.serialize(s),
             };
             s = &mut s[option.size()..];
         }
@@ -171,17 +170,17 @@ impl RequestPacket {
         external_port: u16,
         external_addr: Ipv6Addr,
         options: Vec<PacketOption>,
-    ) -> Result<Self, ParsingError> {
+    ) -> Result<Self, Error> {
         // Check that the provided options are supported by the opcode
         for option in &options {
             let code = option.header.code;
             if !OpCode::Map.is_option_valid(code) {
-                return Err(ParsingError::InvalidOption(OpCode::Map, code));
+                return Err(Error::InvalidOption(OpCode::Map, code));
             }
         }
         // Check that the version is supported
         if version < 2 {
-            return Err(ParsingError::VersionNotSupported(version));
+            return Err(Error::VersionNotSupported(version));
         }
         let payload = MapRequestPayload {
             nonce,
@@ -212,17 +211,17 @@ impl RequestPacket {
         remote_port: u16,
         remote_addr: Ipv6Addr,
         options: Vec<PacketOption>,
-    ) -> Result<Self, ParsingError> {
+    ) -> Result<Self, Error> {
         // Check that the provided options are supported by the opcode
         for option in &options {
             let code = option.header.code;
             if !OpCode::Map.is_option_valid(code) {
-                return Err(ParsingError::InvalidOption(OpCode::Map, code));
+                return Err(Error::InvalidOption(OpCode::Map, code));
             }
         }
         // Check that the version is supported
         if version < 2 {
-            return Err(ParsingError::VersionNotSupported(version));
+            return Err(Error::VersionNotSupported(version));
         }
         let payload = PeerRequestPayload {
             nonce,
@@ -280,7 +279,7 @@ pub struct ResponsePacket {
 }
 
 impl TryFrom<&[u8]> for ResponsePacket {
-    type Error = ParsingError;
+    type Error = Error;
 
     fn try_from(mut slice: &[u8]) -> Result<Self, Self::Error> {
         // Check if the header is valid
@@ -305,7 +304,7 @@ impl TryFrom<&[u8]> for ResponsePacket {
             // As I'm parsing this slice, there is no way it could be
             let code = option.header.code;
             if !header.opcode.is_option_valid(code) {
-                return Err(ParsingError::InvalidOption(header.opcode, code));
+                return Err(Error::InvalidOption(header.opcode, code));
             }
             options.push(option);
         }

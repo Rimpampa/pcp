@@ -1,7 +1,7 @@
 use super::event::ServerEvent;
 use super::map::{InboundMap, Map, OutboundMap};
 use crate::event::ClientEvent;
-use crate::types::ParsingError;
+use crate::types;
 use crate::IpAddress;
 use std::sync::mpsc;
 use std::{fmt, io};
@@ -17,7 +17,7 @@ pub enum Error {
     Channel,
     /// Warning generated when the server responds with a packet with an unknown
     /// format or some invalid values
-    Parsing(ParsingError),
+    Parsing(types::Error),
 }
 
 impl From<io::Error> for Error {
@@ -26,8 +26,8 @@ impl From<io::Error> for Error {
     }
 }
 
-impl From<ParsingError> for Error {
-    fn from(err: ParsingError) -> Self {
+impl From<types::Error> for Error {
+    fn from(err: types::Error) -> Self {
         Self::Parsing(err)
     }
 }
