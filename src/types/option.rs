@@ -1,7 +1,7 @@
 use std::net::Ipv6Addr;
 
 use super::{util, Error, OptionCode};
-use util::{Deserialize, Serialize};
+use util::{Deserialize, DeserializeSkip, Serialize};
 
 /// PCP filter option payload
 ///
@@ -43,31 +43,28 @@ impl Filter {
     pub const LENGTH: u16 = 20;
 }
 
-impl Serialize for Filter {
-    fn se(&self, data: &mut [u8]) {
-        let data: &mut [_; Self::LENGTH as usize] = util::sized_mut(data).unwrap();
-        data[0] = 0;
-        data[1] = self.prefix_length;
-        self.remote_peer_port.se(&mut data[2..4]);
-        self.remote_peer_addr.se(&mut data[4..20]);
+impl Serialize<Filter> for [u8] {
+    fn se(&mut self, filter: Filter) -> util::Result<&mut Self> {
+        self.se(0u8)?
+            .se(filter.prefix_length)?
+            .se(filter.remote_peer_port)?
+            .se(filter.remote_peer_addr)
     }
 }
 
-impl TryFrom<&[u8]> for Filter {
-    type Error = Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let data: &[_; Self::LENGTH as usize] = util::sized_ref(data)?;
-        if let [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, _, _, _, _] = data[4..20] {
-            if data[1] < 96 {
-                return Err(Error::InvalidPrefix(data[1]));
+impl Deserialize<Filter> for &[u8] {
+    fn de(&mut self) -> util::Result<Filter> {
+        let filter = Filter {
+            prefix_length: self.skip(1)?.de()?,
+            remote_peer_port: self.de()?,
+            remote_peer_addr: self.de()?,
+        };
+        match filter.remote_peer_addr.segments() {
+            [0, 0, 0, 0, 0, 0xffff, _, _] if filter.prefix_length < 96 => {
+                Err(Error::InvalidPrefix(filter.prefix_length))
             }
+            _ => Ok(filter),
         }
-        Ok(Self {
-            prefix_length: data[1],
-            remote_peer_port: data[2..4].de(),
-            remote_peer_addr: data[4..20].de(),
-        })
     }
 }
 
@@ -101,20 +98,16 @@ impl ThirdParty {
     pub const LENGTH: u16 = 16;
 }
 
-impl Serialize for ThirdParty {
-    fn se(&self, data: &mut [u8]) {
-        let data: &mut [_; Self::LENGTH as usize] = util::sized_mut(data).unwrap();
-        self.internal_addr.se(&mut data[..]);
+impl Serialize<ThirdParty> for [u8] {
+    fn se(&mut self, value: ThirdParty) -> util::Result<&mut Self> {
+        self.se(value.internal_addr)
     }
 }
 
-impl TryFrom<&[u8]> for ThirdParty {
-    type Error = Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let data: &[_; Self::LENGTH as usize] = util::sized_ref(data)?;
-        Ok(Self {
-            internal_addr: data.de(),
+impl Deserialize<ThirdParty> for &[u8] {
+    fn de(&mut self) -> util::Result<ThirdParty> {
+        Ok(ThirdParty {
+            internal_addr: self.de()?,
         })
     }
 }
@@ -141,15 +134,15 @@ impl PreferFailure {
     pub const LENGTH: u16 = 0;
 }
 
-impl Serialize for PreferFailure {
-    fn se(&self, out: &mut [u8]) {}
+impl Serialize<PreferFailure> for [u8] {
+    fn se(&mut self, _: PreferFailure) -> util::Result<&mut Self> {
+        Ok(self)
+    }
 }
 
-impl TryFrom<&[u8]> for PreferFailure {
-    type Error = Error;
-
-    fn try_from(_: &[u8]) -> Result<Self, Self::Error> {
-        Ok(Self {})
+impl Deserialize<PreferFailure> for &[u8] {
+    fn de(&mut self) -> util::Result<PreferFailure> {
+        Ok(PreferFailure)
     }
 }
 
@@ -213,41 +206,35 @@ impl Option {
     }
 }
 
-impl Serialize for Option {
-    fn se(&self, data: &mut [u8]) {
-        let header: &mut [_; Self::HEADER_SIZE] = util::sized_mut(data).unwrap();
-        header[0] = self.option_code() as u8;
-        header[1] = 0;
-        self.length().se(&mut header[2..4]);
-        let payload = &mut data[Self::HEADER_SIZE..];
-        match self {
-            Option::Filter(p) => p.se(payload),
-            Option::ThirdParty(p) => p.se(payload),
-            Option::PreferFailure(p) => p.se(payload),
+impl Serialize<Option> for [u8] {
+    fn se(mut self: &mut Self, value: Option) -> util::Result<&mut Self> {
+        self = self.se(value.option_code() as u8)?
+            .se(0u8)?
+            .se(value.length())?;
+        match value {
+            Option::Filter(p) => self.se(p),
+            Option::ThirdParty(p) => self.se(p),
+            Option::PreferFailure(p) => self.se(p),
         }
     }
 }
 
-impl TryFrom<&[u8]> for Option {
-    type Error = Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let header: &[_; Self::HEADER_SIZE] = util::sized_ref(data)?;
-        let code = header[0].try_into()?;
-        let length: u16 = header[2..4].de();
+impl Deserialize<Option> for &[u8] {
+    fn de(&mut self) -> util::Result<Option> {
+        let code = self.de()?;
+        let length = self.de()?;
         let check = match code {
             OptionCode::Filter => Filter::LENGTH,
             OptionCode::ThirdParty => ThirdParty::LENGTH,
             OptionCode::PreferFailure => PreferFailure::LENGTH,
         };
-        if length != check as u16 {
+        if check != length {
             return Err(Error::InvalidOptionLength(code, length as usize));
         }
-        let payload = &data[Self::HEADER_SIZE..];
         Ok(match code {
-            OptionCode::ThirdParty => Self::ThirdParty(payload.try_into()?),
-            OptionCode::PreferFailure => Self::PreferFailure(payload.try_into()?),
-            OptionCode::Filter => Self::Filter(payload.try_into()?),
+            OptionCode::ThirdParty => Option::ThirdParty(self.de()?),
+            OptionCode::PreferFailure => Option::PreferFailure(self.de()?),
+            OptionCode::Filter => Option::Filter(self.de()?),
         })
     }
 }

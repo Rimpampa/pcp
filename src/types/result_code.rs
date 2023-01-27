@@ -129,7 +129,7 @@ impl TryFrom<u8> for ResultCode {
             11 => Ok(CannotProvideExternal),
             12 => Ok(AddressMismatch),
             13 => Ok(ExcessiveRemotePeers),
-            n => Err(Error::NotAResultCode(n)),
+            n => Err(Error::InvalidResultCode(n)),
         }
     }
 }

@@ -1,13 +1,210 @@
-use super::*;
-use crate::{types::util::Serialize, ProtocolNumber};
-use std::convert::{TryFrom, TryInto};
+use std::net::Ipv6Addr;
+
+use crate::types::{util, ProtocolNumber};
+use util::{Deserialize, DeserializeSkip, Serialize};
+
+use super::{Error, OpCode};
 
 /// Maximum size a PCP packet can have
 pub const MAX_PACKET_SIZE: usize = 1100;
 
-const MAX_REQUEST_PAYLOAD_SIZE: usize = MAX_PACKET_SIZE - RequestHeader::SIZE;
+const MAX_REQUEST_PAYLOAD_SIZE: usize = MAX_PACKET_SIZE - Request::HEADER_SIZE;
 
-const MAX_RESPONSE_PAYLOAD_SIZE: usize = MAX_PACKET_SIZE - ResponseHeader::SIZE;
+// const MAX_RESPONSE_PAYLOAD_SIZE: usize = MAX_PACKET_SIZE - ResponseHeader::SIZE;
+
+pub type Nonce = [u8; 12];
+
+/// PCP map request payload
+///
+/// # Format
+///
+/// ```plain
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// |                 Mapping Nonce (96 bits)                       |
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |   Protocol    |          Reserved (24 bits)                   |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |        Internal Port          |    Suggested External Port    |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// |           Suggested External IP Address (128 bits)            |
+/// |                                                               |
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(PartialEq, Debug)]
+pub struct Map {
+    /// Random value chosen by the PCP client
+    pub mapping_nonce: Nonce,
+    /// Upper-layer protocol associated with this mapping
+    ///
+    /// The value [`ProtocolNumber::Hopopt`] (0) has a special
+    /// meaning for _all protocols_.
+    pub protocol: ProtocolNumber,
+    /// Internal port for the mapping
+    ///
+    /// The value `0` indicates _all ports_, and is legal when the lifetime
+    /// is zero (a delete request), if the protocol does not use 16-bit
+    /// port numbers, or the client is requesting _all ports_.
+    ///
+    /// If the `protocol` is [`ProtocolNumber::Hopopt`] (zero, meaning _all protocols_),
+    /// then internal port **must** be zero on transmission and **must** be
+    /// ignored on reception.
+    pub internal_port: u16,
+    /// Suggested external port for the mapping
+    ///
+    /// This is useful for refreshing a mapping, especially after the PCP
+    /// server loses state.
+    ///
+    /// If the PCP client does not know the external
+    /// port, or does not have a preference, it **must** use 0.
+    pub suggested_external_port: u16,
+    /// Suggested external IPv4 or IPv6 address
+    ///
+    /// This is useful for refreshing a mapping, especially
+    /// after the PCP server loses state.
+    ///
+    /// If the PCP client does not know
+    /// the external address, or does not have a preference, it **must** use
+    /// the address-family-specific all-zeros address, which is
+    /// [`Ipv4Addr::UNSPECIFIED`](std::net::Ipv4Addr::UNSPECIFIED) for IPv4 and
+    /// [`Ipv6Addr::UNSPECIFIED`](std::net::Ipv6Addr::UNSPECIFIED) for IPv6
+    pub suggested_external_addr: Ipv6Addr,
+}
+
+impl Map {
+    pub const SIZE: usize = 36;
+}
+
+impl Serialize<Map> for [u8] {
+    fn se(self: &mut Self, map: Map) -> util::Result<&mut Self> {
+        self.se(map.mapping_nonce)?
+            .se(map.protocol as u8)?
+            .se([0; 3])?
+            .se(map.internal_port)?
+            .se(map.suggested_external_port)?
+            .se(map.suggested_external_addr)
+    }
+}
+
+impl Deserialize<Map> for &[u8] {
+    fn de(&mut self) -> util::Result<Map> {
+        Ok(Map {
+            mapping_nonce: self.de()?,
+            protocol: self.de()?,
+            internal_port: self.skip(3)?.de()?,
+            suggested_external_port: self.de()?,
+            suggested_external_addr: self.de()?,
+        })
+    }
+}
+
+/// PCP peer request payload
+///
+/// # Format
+///
+/// ```plain
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// |                 Mapping Nonce (96 bits)                       |
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |   Protocol    |          Reserved (24 bits)                   |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |        Internal Port          |    Suggested External Port    |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// |           Suggested External IP Address (128 bits)            |
+/// |                                                               |
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |       Remote Peer Port        |     Reserved (16 bits)        |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// |               Remote Peer IP Address (128 bits)               |
+/// |                                                               |
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(PartialEq, Debug)]
+pub struct Peer {
+    /// Random value chosen by the PCP client
+    pub mapping_nonce: Nonce,
+    /// Upper-layer protocol associated with this mapping
+    ///
+    /// The value [`ProtocolNumber::Hopopt`] (0) has a special
+    /// meaning for _all protocols_.
+    pub protocol: ProtocolNumber,
+    /// Internal port for the mapping
+    ///
+    /// The value `0` indicates _all ports_, and is legal when the lifetime
+    /// is zero (a delete request), if the protocol does not use 16-bit
+    /// port numbers, or the client is requesting _all ports_.
+    ///
+    /// If the `protocol` is [`ProtocolNumber::Hopopt`] (zero, meaning _all protocols_),
+    /// then internal port **must** be zero on transmission and **must** be
+    /// ignored on reception.
+    pub internal_port: u16,
+    /// Suggested external port for the mapping
+    ///
+    /// This is useful for refreshing a mapping, especially after the PCP
+    /// server loses state.
+    ///
+    /// If the PCP client does not know the external
+    /// port, or does not have a preference, it **must** use 0.
+    pub suggested_external_port: u16,
+    /// Suggested external IPv4 or IPv6 address
+    ///
+    /// This is useful for refreshing a mapping, especially
+    /// after the PCP server loses state.
+    ///
+    /// If the PCP client does not know
+    /// the external address, or does not have a preference, it **must** use
+    /// the address-family-specific all-zeros address, which is
+    /// [`Ipv4Addr::UNSPECIFIED`](std::net::Ipv4Addr::UNSPECIFIED) for IPv4 and
+    /// [`Ipv6Addr::UNSPECIFIED`](std::net::Ipv6Addr::UNSPECIFIED) for IPv6
+    pub suggested_external_addr: Ipv6Addr,
+    pub remote_peer_port: u16,
+    pub remote_peer_addr: Ipv6Addr,
+}
+
+impl Peer {
+    pub const SIZE: usize = 56;
+}
+
+impl Serialize<Peer> for [u8] {
+    fn se(self: &mut Self, peer: Peer) -> util::Result<&mut Self> {
+        self.se(peer.mapping_nonce)?
+            .se(peer.protocol as u8)?
+            .se([0; 3])?
+            .se(peer.internal_port)?
+            .se(peer.suggested_external_port)?
+            .se(peer.suggested_external_addr)?
+            .se(peer.remote_peer_port)?
+            .se([0; 2])?
+            .se(peer.remote_peer_addr)
+    }
+}
+
+impl Deserialize<Peer> for &[u8] {
+    fn de(&mut self) -> util::Result<Peer> {
+        Ok(Peer {
+            mapping_nonce: self.de()?,
+            protocol: self.de()?,
+            internal_port: self.skip(3)?.de()?,
+            suggested_external_port: self.de()?,
+            suggested_external_addr: self.de()?,
+            remote_peer_port: self.de()?,
+            remote_peer_addr: self.skip(2)?.de()?,
+        })
+    }
+}
 
 /// Generic payload + options data strcuture
 ///
@@ -25,20 +222,48 @@ pub struct Payload<T, const SIZE: usize> {
     pub raw_options: ([u8; SIZE], usize),
 }
 
-pub type MapPayload =
-    Payload<MapRequestPayload, { MAX_REQUEST_PAYLOAD_SIZE - MapRequestPayload::SIZE }>;
+pub type MapPayload = Payload<Map, { MAX_REQUEST_PAYLOAD_SIZE - Map::SIZE }>;
 
-pub type PeerPayload =
-    Payload<PeerRequestPayload, { MAX_REQUEST_PAYLOAD_SIZE - PeerRequestPayload::SIZE }>;
+pub type PeerPayload = Payload<Peer, { MAX_REQUEST_PAYLOAD_SIZE - Peer::SIZE }>;
 
-pub type AnnouncePayload = Payload<(), MAX_REQUEST_PAYLOAD_SIZE>;
+pub type AnnouncePayload = Payload<[u8; 0], MAX_REQUEST_PAYLOAD_SIZE>;
+
+impl<T, const SIZE: usize> Serialize<Payload<T, SIZE>> for [u8]
+where
+    [u8]: Serialize<T> + for<'a> Serialize<&'a [u8]>,
+{
+    fn se(&mut self, payload: Payload<T, SIZE>) -> util::Result<&mut Self> {
+        let (opt, len) = &payload.raw_options;
+        self.se(payload.data)?.se(&opt[..*len])
+    }
+}
+
+impl<T, const SIZE: usize> Deserialize<Payload<T, SIZE>> for [u8]
+where
+    [u8]: Deserialize<T>,
+{
+    fn de(&mut self) -> util::Result<Payload<T, SIZE>> {
+        let data = self.de()?;
+        if self.len() > SIZE {
+            return Err(Error::InvalidSliceSize(self.len(), SIZE))
+        }
+        let mut array = [0; SIZE];
+        array[..self.len()].copy_from_slice(self);
+        Ok({
+            Payload {
+                data,
+                raw_options: (array, self.len()),
+            }
+        })
+    }
+}
 
 /// PCP request payload
 ///
 /// This enum has a discriminant for each [`OpCode`]
 /// which contains the payload and the options requested.
 ///
-/// The tag of this _tagged enum_ could be compared to the `Opcode`
+/// The tag of this enum could be compared to the `Opcode`
 /// field of the request header (check [`RequestPacket`])
 #[derive(PartialEq, Debug)]
 pub enum RequestPayload {
@@ -50,13 +275,23 @@ pub enum RequestPayload {
     Announce(AnnouncePayload),
 }
 
+impl RequestPayload {
+    pub const fn opcode(&self) -> OpCode {
+        match self {
+            Self::Map(_) => OpCode::Map,
+            Self::Peer(_) => OpCode::Peer,
+            Self::Announce(_) => OpCode::Announce,
+        }
+    }
+}
+
 /// PCP request packet
 ///
 /// # Format
 ///
 /// ```plain
-/// 0               1               2               3
-/// 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 8
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// |  Version = 2  |R|   Opcode    |         Reserved              |
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -77,14 +312,16 @@ pub enum RequestPayload {
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// ```
 #[derive(PartialEq, Debug)]
-pub struct RequestPacket {
+pub struct Request {
     /// The version of the PCP protocol
     ///
     /// This field is used for version negotiation,
     /// PCP clients and servers compliant with the RFC 6887
-    /// use the value 2
+    /// use the value `2`
     pub version: u8,
-    /// Requested lifetime, in seconds
+    /// Requested lifetime of this mapping, in seconds
+    ///
+    /// The value 0 indicates _delete_
     pub lifetime: u32,
     /// The source IP address used by the PCP client when
     /// sending this PCP request
@@ -100,221 +337,42 @@ pub struct RequestPacket {
     pub payload: RequestPayload,
 }
 
-impl RequestPacket {
-    /// Fills the byte array with the request packet formatted correctly
-    pub fn serialize(&self, mut s: &mut [u8]) {
-        assert!(s.len() >= self.size());
+impl Request {
+    pub const HEADER_SIZE: usize = 24;
+}
 
-        self.header.serialize(&mut s);
-        s = &mut s[self.header.size()..];
-
-        match &self.payload {
-            RequestPayload::Map(p) => p.se(s),
-            RequestPayload::Peer(p) => p.se(s),
-            RequestPayload::Announce => (),
-        };
-        s = &mut s[self.payload.size()..];
-
-        for option in &self.options {
-            match &option.payload {
-                OptionPayload::PreferFailure => (),
-                OptionPayload::Filter(p) => p.serialize(s),
-                OptionPayload::ThirdParty(p) => p.serialize(s),
-            };
-            s = &mut s[option.size()..];
-        }
-    }
-
-    /// Constructs a PCP map request
-    pub fn map(
-        version: u8,
-        lifetime: u32,
-        internal_addr: Ipv6Addr,
-        nonce: [u8; 12],
-        protocol: ProtocolNumber,
-        internal_port: u16,
-        external_port: u16,
-        external_addr: Ipv6Addr,
-        options: Vec<PacketOption>,
-    ) -> Result<Self, Error> {
-        // Check that the provided options are supported by the opcode
-        for option in &options {
-            let code = option.header.code;
-            if !OpCode::Map.is_option_valid(code) {
-                return Err(Error::InvalidOption(OpCode::Map, code));
-            }
-        }
-        // Check that the version is supported
-        if version < 2 {
-            return Err(Error::VersionNotSupported(version));
-        }
-        let payload = MapRequestPayload {
-            nonce,
-            protocol,
-            internal_port,
-            external_port,
-            external_addr,
-        };
-
-        Self {
-            header: RequestHeader::map(version, lifetime, internal_addr),
-            payload: RequestPayload::Map(payload),
-            options,
-        }
-        .check_size()
-    }
-
-    /// Constructs a PCP peer request
-    pub fn peer(
-        version: u8,
-        lifetime: u32,
-        internal_addr: Ipv6Addr,
-        nonce: [u8; 12],
-        protocol: ProtocolNumber,
-        internal_port: u16,
-        external_port: u16,
-        external_addr: Ipv6Addr,
-        remote_port: u16,
-        remote_addr: Ipv6Addr,
-        options: Vec<PacketOption>,
-    ) -> Result<Self, Error> {
-        // Check that the provided options are supported by the opcode
-        for option in &options {
-            let code = option.header.code;
-            if !OpCode::Map.is_option_valid(code) {
-                return Err(Error::InvalidOption(OpCode::Map, code));
-            }
-        }
-        // Check that the version is supported
-        if version < 2 {
-            return Err(Error::VersionNotSupported(version));
-        }
-        let payload = PeerRequestPayload {
-            nonce,
-            protocol,
-            internal_port,
-            external_port,
-            external_addr,
-            remote_port,
-            remote_addr,
-        };
-        Self {
-            header: RequestHeader::peer(version, lifetime, internal_addr),
-            payload: RequestPayload::Peer(payload),
-            options,
-        }
-        .check_size()
-    }
-
-    /// Constructs a PCP announce request
-    pub fn announce(version: u8, address: Ipv6Addr) -> Self {
-        Self {
-            header: RequestHeader::announce(version, address),
-            payload: RequestPayload::Announce,
-            options: Vec::new(),
+impl Serialize<Request> for [u8] {
+    fn se(mut self: &mut Self, req: Request) -> util::Result<&mut Self> {
+        self = self
+            .se(req.version)?
+            .se(req.payload.opcode() as u8 & 0b01111111)?
+            .se([0; 2])?
+            .se(req.lifetime)?
+            .se(req.address)?;
+        match req.payload {
+            RequestPayload::Map(p) => self.se(p),
+            RequestPayload::Peer(p) => self.se(p),
+            RequestPayload::Announce(p) => self.se(p),
         }
     }
 }
 
-// ========================================== RESPONESES ==========================================
-
-/// TODO
-#[derive(PartialEq, Debug)]
-pub enum ResponsePayload {
-    Map(MapResponsePayload),
-    Peer(PeerResponsePayload),
-    Announce,
-}
-
-impl ResponsePayload {
-    pub fn size(&self) -> usize {
-        match self {
-            ResponsePayload::Map(_) => MapResponsePayload::SIZE,
-            ResponsePayload::Peer(_) => PeerResponsePayload::SIZE,
-            ResponsePayload::Announce => 0,
-        }
-    }
-}
-
-/// A correctly formed PCP response packet.
-#[derive(PartialEq, Debug)]
-pub struct ResponsePacket {
-    pub header: ResponseHeader,
-    pub payload: ResponsePayload,
-    pub options: Vec<PacketOption>,
-}
-
-impl TryFrom<&[u8]> for ResponsePacket {
-    type Error = Error;
-
-    fn try_from(mut slice: &[u8]) -> Result<Self, Self::Error> {
-        // Check if the header is valid
-        let header = ResponseHeader::try_from(slice)?;
-
-        slice = &slice[ResponseHeader::SIZE..];
-
-        // Check if the payload is valid
-        let payload = match header.opcode {
-            OpCode::Map => ResponsePayload::Map(slice.try_into()?),
-            OpCode::Peer => ResponsePayload::Peer(slice.try_into()?),
-            OpCode::Announce => ResponsePayload::Announce,
+impl Deserialize<Request> for &[u8] {
+    fn de(&mut self) -> util::Result<Request> {
+        let version = self.de()?;
+        let opcode = self.de()?;
+        let lifetime = self.skip(2)?.de()?;
+        let address = self.de()?;
+        let payload = match opcode {
+            OpCode::Map => RequestPayload::Map(self.de()?),
+            OpCode::Peer => RequestPayload::Peer(self.de()?),
+            OpCode::Announce => RequestPayload::Announce(self.de()?),
         };
-        slice = &slice[payload.size()..];
-
-        let mut options = Vec::new();
-        // Check for possible options
-        while !slice.is_empty() {
-            let option = PacketOption::try_from(slice)?;
-            slice = &slice[option.size()..];
-            // Check if the option is valid for this opcode
-            // As I'm parsing this slice, there is no way it could be
-            let code = option.header.code;
-            if !header.opcode.is_option_valid(code) {
-                return Err(Error::InvalidOption(header.opcode, code));
-            }
-            options.push(option);
-        }
-        Ok(Self {
-            header,
+        Ok(Request {
+            version,
+            lifetime,
+            address,
             payload,
-            options,
         })
-    }
-}
-
-impl PartialEq<RequestPacket> for ResponsePacket {
-    fn eq(&self, other: &RequestPacket) -> bool {
-        use RequestPayload as Req;
-        use ResponsePayload as Res;
-
-        let check_payload = match (&self.payload, &other.payload) {
-            (Res::Announce, Req::Announce) => true,
-            (Res::Map(res), Req::Map(req)) => {
-                // Do not check the external address as the server can choose anything
-                res.protocol == req.protocol
-                    && (res.external_port == req.external_port || req.external_port == 0)
-                    && res.internal_port == req.internal_port
-                    && res.nonce == req.nonce
-            }
-            (Res::Peer(res), Req::Peer(req)) => {
-                res.protocol == req.protocol
-                    && (res.external_port == req.external_port || req.external_port == 0)
-                    && res.internal_port == req.internal_port
-                    && res.nonce == req.nonce
-                    && res.remote_addr == req.remote_addr
-                    && res.remote_port == req.remote_port
-            }
-            _ => false,
-        };
-
-        self.header.opcode == other.header.opcode
-            && self.header.version == other.header.version
-            && check_payload
-    }
-}
-
-impl PartialEq<ResponsePacket> for RequestPacket {
-    fn eq(&self, other: &ResponsePacket) -> bool {
-        other == self
     }
 }

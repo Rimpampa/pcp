@@ -1,5 +1,5 @@
-use super::Error;
-use std::convert::TryFrom;
+use super::{Error, util};
+use util::Deserialize;
 
 /// The `OptionCode` field contained in the PCP option header (see `OptionHeader`)
 ///
@@ -15,15 +15,13 @@ pub enum OptionCode {
     Filter = 3,
 }
 
-impl TryFrom<u8> for OptionCode {
-    type Error = Error;
-
-    fn try_from(val: u8) -> Result<Self, Self::Error> {
-        match val {
-            1 => Ok(Self::ThirdParty),
-            2 => Ok(Self::PreferFailure),
-            3 => Ok(Self::Filter),
-            n => Err(Error::NotAnOptionCode(n)),
+impl Deserialize<OptionCode> for &[u8] {
+    fn de(&mut self) -> util::Result<OptionCode> {
+        match self.de()? {
+            1 => Ok(OptionCode::ThirdParty),
+            2 => Ok(OptionCode::PreferFailure),
+            3 => Ok(OptionCode::Filter),
+            n => Err(Error::InvalidOptionCode(n)),
         }
     }
 }

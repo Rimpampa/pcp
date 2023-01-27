@@ -1,6 +1,5 @@
-use std::convert::TryFrom;
-
-use super::Error;
+use super::{Error, util};
+use util::Deserialize;
 
 /// All the IP protocol numbers defined by the IANA
 #[derive(PartialEq, Debug, Clone, Copy)]
@@ -299,12 +298,10 @@ pub enum ProtocolNumber {
     Test2 = 254,
 }
 
-impl TryFrom<u8> for ProtocolNumber {
-    type Error = Error;
-
-    fn try_from(val: u8) -> Result<ProtocolNumber, Self::Error> {
-        use Error::*;
+impl Deserialize<ProtocolNumber> for &[u8] {
+    fn de(&mut self) -> util::Result<ProtocolNumber> {
         use ProtocolNumber::*;
+        let [val]: [_; 1] = self.de()?;
         match val {
             0 => Ok(Hopopt),
             1 => Ok(Icmp),
@@ -452,7 +449,7 @@ impl TryFrom<u8> for ProtocolNumber {
             143 => Ok(Ethernet),
             253 => Ok(Test1),
             254 => Ok(Test2),
-            n => Err(NotAProtocolNumber(n)),
+            n => Err(Error::InvalidProtocolNumber(n)),
         }
     }
 }

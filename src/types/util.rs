@@ -1,70 +1,97 @@
-use super::Error::{self, *};
+use std::net::Ipv6Addr;
 
-pub fn sized_ref<const S: usize>(s: &[u8]) -> Result<&[u8; S], Error> {
-    let s = s.get(..S).ok_or_else(|| InvalidSliceLength(s.len()))?;
-    Ok(s.try_into().unwrap())
+use super::Error::{self, InvalidSliceSize};
+
+pub type Result<T> = core::result::Result<T, Error>;
+
+pub trait DeserializeSkip<Out>: Deserialize<Out> {
+    fn skip(&mut self, times: usize) -> Result<&mut Self> {
+        match (0..times).flat_map(|_| self.de().err()).next() {
+            Some(err) => Err(err),
+            None => Ok(self),
+        }
+    }
 }
 
-pub fn sized_mut<const S: usize>(s: &mut [u8]) -> Option<&mut [u8; S]> {
-    Some(s.get_mut(..S)?.try_into().unwrap())
-}
+impl DeserializeSkip<u8> for &[u8] {}
 
 pub trait Deserialize<Out> {
-    fn de(&self) -> Out;
+    fn de(&mut self) -> Result<Out>;
 }
 
-impl<const S: usize> Deserialize<[u8; S]> for [u8] {
-    fn de(&self) -> [u8; S] {
-        self.try_into().unwrap()
+impl<const S: usize> Deserialize<[u8; S]> for &[u8] {
+    fn de(&mut self) -> Result<[u8; S]> {
+        let arr = self.get(..S).ok_or(InvalidSliceSize(self.len(), S))?;
+        *self = &self[S..];
+        Ok(arr.try_into().unwrap())
     }
 }
 
-impl Deserialize<u16> for [u8] {
-    fn de(&self) -> u16 {
-        u16::from_be_bytes(self.de())
+impl Deserialize<u8> for &[u8] {
+    fn de(&mut self) -> Result<u8> {
+        let [v]: [_; 1] = self.de()?;
+        Ok(v)
     }
 }
 
-impl Deserialize<u32> for [u8] {
-    fn de(&self) -> u32 {
-        u32::from_be_bytes(self.de())
+impl Deserialize<u16> for &[u8] {
+    fn de(&mut self) -> Result<u16> {
+        Ok(u16::from_be_bytes(self.de()?))
     }
 }
 
-impl Deserialize<std::net::Ipv6Addr> for [u8] {
-    fn de(&self) -> std::net::Ipv6Addr {
-        Deserialize::<[u8; 16]>::de(self).into()
+impl Deserialize<u32> for &[u8] {
+    fn de(&mut self) -> Result<u32> {
+        Ok(u32::from_be_bytes(self.de()?))
     }
 }
 
-pub trait Serialize {
-    fn se(&self, out: &mut [u8]);
-}
-
-impl<const S: usize> Serialize for [u8; S] {
-    fn se(&self, out: &mut [u8]) {
-        out.copy_from_slice(self)
+impl Deserialize<Ipv6Addr> for &[u8] {
+    fn de(&mut self) -> Result<Ipv6Addr> {
+        Ok(From::<[u8; 16]>::from(self.de()?))
     }
 }
 
-impl Serialize for u16 {
-    fn se(&self, out: &mut [u8]) {
-        self.to_be_bytes().se(out)
+pub trait Serialize<In> {
+    fn se(&mut self, value: In) -> Result<&mut Self>;
+}
+
+impl Serialize<&[u8]> for [u8] {
+    fn se(&mut self, value: &[u8]) -> Result<&mut Self> {
+        if self.len() < value.len() {
+            return Err(InvalidSliceSize(self.len(), value.len()));
+        }
+        self[..value.len()].copy_from_slice(&value);
+        Ok(&mut self[value.len()..])
     }
 }
 
-impl Serialize for u32 {
-    fn se(&self, out: &mut [u8]) {
-        self.to_be_bytes().se(out)
+impl<const S: usize> Serialize<[u8; S]> for [u8] {
+    fn se(&mut self, value: [u8; S]) -> Result<&mut Self> {
+        self.se(&value[..])
     }
 }
 
-impl Serialize for std::net::Ipv6Addr {
-    fn se(&self, out: &mut [u8]) {
-        self.octets().se(out)
+impl Serialize<u8> for [u8] {
+    fn se(&mut self, value: u8) -> Result<&mut Self> {
+        self.se([value])
     }
 }
 
-pub trait ConstantSize {
-    const SIZE: usize;
+impl Serialize<u16> for [u8] {
+    fn se(&mut self, value: u16) -> Result<&mut Self> {
+        self.se(value.to_be_bytes())
+    }
+}
+
+impl Serialize<u32> for [u8] {
+    fn se(&mut self, value: u32) -> Result<&mut Self> {
+        self.se(value.to_be_bytes())
+    }
+}
+
+impl Serialize<Ipv6Addr> for [u8] {
+    fn se(&mut self, value: Ipv6Addr) -> Result<&mut Self> {
+        self.se(value.octets())
+    }
 }

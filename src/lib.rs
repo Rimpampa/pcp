@@ -92,80 +92,80 @@
 
 // TODO: expand documentation
 
-mod client;
-mod event;
-mod handle;
-mod map;
-mod state;
+// mod client;
+// mod event;
+// mod handle;
+// mod map;
+// mod state;
 pub mod types;
 
-pub use client::Client;
-pub use event::{ClientEvent, MapEvent, MapEventKind};
-pub use handle::{Error, Handle, RequestKind};
-pub use map::{InboundMap, Map, OutboundMap};
-pub use state::State;
-pub use types::ProtocolNumber;
+// pub use client::Client;
+// pub use event::{ClientEvent, MapEvent, MapEventKind};
+// pub use handle::{Error, Handle, RequestKind};
+// pub use map::{InboundMap, Map, OutboundMap};
+// pub use state::State;
+// pub use types::ProtocolNumber;
 
-use std::net::{ToSocketAddrs, UdpSocket};
-use std::{
-    io,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
-};
+// use std::net::{ToSocketAddrs, UdpSocket};
+// use std::{
+//     io,
+//     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
+// };
 
-/// Common trait for IPv4 and IPv6 addresses
-pub trait IpAddress: std::fmt::Debug + Send + Copy + Into<IpAddr> + 'static {
-    type SockAddr: ToSocketAddrs;
+// /// Common trait for IPv4 and IPv6 addresses
+// pub trait IpAddress: std::fmt::Debug + Send + Copy + Into<IpAddr> + 'static {
+//     type SockAddr: ToSocketAddrs;
 
-    /// Number of bits of the address
-    const LENGTH: u8;
-    /// Unspeficied address
-    const UNSPECIFIED: Self;
-    /// The link local scope multicast all nodes address
-    const ALL_NODES: Self;
-    /// The IPv6 representation of this address
-    fn to_ipv6(self) -> Ipv6Addr;
-    /// Associate a port with this address
-    fn to_sockaddr(self, port: u16) -> Self::SockAddr;
-    /// Joins the [`UdpSocket`] `sock` to the multicast group with this address
-    fn join_muliticast_group(&self, sock: &UdpSocket) -> io::Result<()>;
-}
+//     /// Number of bits of the address
+//     const LENGTH: u8;
+//     /// Unspeficied address
+//     const UNSPECIFIED: Self;
+//     /// The link local scope multicast all nodes address
+//     const ALL_NODES: Self;
+//     /// The IPv6 representation of this address
+//     fn to_ipv6(self) -> Ipv6Addr;
+//     /// Associate a port with this address
+//     fn to_sockaddr(self, port: u16) -> Self::SockAddr;
+//     /// Joins the [`UdpSocket`] `sock` to the multicast group with this address
+//     fn join_muliticast_group(&self, sock: &UdpSocket) -> io::Result<()>;
+// }
 
-impl IpAddress for Ipv4Addr {
-    type SockAddr = SocketAddrV4;
+// impl IpAddress for Ipv4Addr {
+//     type SockAddr = SocketAddrV4;
 
-    const LENGTH: u8 = 32;
-    const UNSPECIFIED: Self = Self::UNSPECIFIED;
-    const ALL_NODES: Self = Self::new(224, 0, 0, 1);
+//     const LENGTH: u8 = 32;
+//     const UNSPECIFIED: Self = Self::UNSPECIFIED;
+//     const ALL_NODES: Self = Self::new(224, 0, 0, 1);
 
-    fn to_ipv6(self) -> Ipv6Addr {
-        self.to_ipv6_mapped()
-    }
+//     fn to_ipv6(self) -> Ipv6Addr {
+//         self.to_ipv6_mapped()
+//     }
 
-    fn to_sockaddr(self, port: u16) -> Self::SockAddr {
-        Self::SockAddr::new(self, port)
-    }
+//     fn to_sockaddr(self, port: u16) -> Self::SockAddr {
+//         Self::SockAddr::new(self, port)
+//     }
 
-    fn join_muliticast_group(&self, sock: &UdpSocket) -> io::Result<()> {
-        sock.join_multicast_v4(self, &Self::UNSPECIFIED)
-    }
-}
+//     fn join_muliticast_group(&self, sock: &UdpSocket) -> io::Result<()> {
+//         sock.join_multicast_v4(self, &Self::UNSPECIFIED)
+//     }
+// }
 
-impl IpAddress for Ipv6Addr {
-    type SockAddr = SocketAddrV6;
+// impl IpAddress for Ipv6Addr {
+//     type SockAddr = SocketAddrV6;
 
-    const LENGTH: u8 = 128;
-    const UNSPECIFIED: Self = Self::UNSPECIFIED;
-    const ALL_NODES: Self = Self::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
+//     const LENGTH: u8 = 128;
+//     const UNSPECIFIED: Self = Self::UNSPECIFIED;
+//     const ALL_NODES: Self = Self::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
 
-    fn to_ipv6(self) -> Ipv6Addr {
-        self
-    }
+//     fn to_ipv6(self) -> Ipv6Addr {
+//         self
+//     }
 
-    fn to_sockaddr(self, port: u16) -> Self::SockAddr {
-        Self::SockAddr::new(self, port, 0, 0)
-    }
+//     fn to_sockaddr(self, port: u16) -> Self::SockAddr {
+//         Self::SockAddr::new(self, port, 0, 0)
+//     }
 
-    fn join_muliticast_group(&self, sock: &UdpSocket) -> io::Result<()> {
-        sock.join_multicast_v6(self, 0)
-    }
-}
+//     fn join_muliticast_group(&self, sock: &UdpSocket) -> io::Result<()> {
+//         sock.join_multicast_v6(self, 0)
+//     }
+// }

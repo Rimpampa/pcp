@@ -3,28 +3,20 @@ use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Error {
-    /// The parsed value (1st) is not an opcode
-    NotAnOpCode(u8),
-    /// The parsed value (1st) is not an option code
-    NotAnOptionCode(u8),
-    /// The parsed value (1st) is not a result code
-    NotAResultCode(u8),
-    /// The parsed value (1st) is not a protocol number
-    NotAProtocolNumber(u8),
-    /// The size of the value (1st) is bigger than the size of the slice
-    InvalidSliceLength(usize),
-    /// The option length field (2nd) is invalid for that option code (1st)
+    InvalidOpCode(u8),
+    InvalidOptionCode(u8),
+    InvalidResultCode(u8),
+    InvalidProtocolNumber(u8),
+    InvalidSliceSize(usize, usize),
     InvalidOptionLength(OptionCode, usize),
-    /// The version (1st) is not supported
+    InvalidPrefix(u8),
+    InvalidOption(OpCode, OptionCode),
     VersionNotSupported(u8),
     /// The R field of the response message header is not 1
     NotAResponse,
     /// The R field of the request message header is not 0
     NotARequest,
-    /// The filter option prefix is invalid
-    InvalidPrefix(u8),
     /// The option code (2nd) is not valid for that opcode (1st)
-    InvalidOption(OpCode, OptionCode),
     /// The constructed packet is too big
     PacketTooBig(usize),
 }
@@ -33,11 +25,11 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use Error::*;
         match self {
-            NotAnOpCode(c) => write!(f, "The value {} is not a valid opcode", c),
-            NotAnOptionCode(c) => write!(f, "The value {} is not a valid option code", c),
-            NotAResultCode(c) => write!(f, "The value {} is not a valid result code", c),
-            NotAProtocolNumber(n) => write!(f, "The value {} is not a valid protocol number", n),
-            InvalidSliceLength(l) => write!(f, "The the slice as an invalid length of {}", l),
+            InvalidOpCode(c) => write!(f, "The value {} is not a valid opcode", c),
+            InvalidOptionCode(c) => write!(f, "The value {} is not a valid option code", c),
+            InvalidResultCode(c) => write!(f, "The value {} is not a valid result code", c),
+            InvalidProtocolNumber(n) => write!(f, "The value {} is not a valid protocol number", n),
+            InvalidSliceSize(l, _) => write!(f, "The the slice as an invalid length of {}", l),
             InvalidOptionLength(o, l) => {
                 write!(f, "A length of {} is invalid for the option {:?}", l, o)
             }

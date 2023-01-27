@@ -1,5 +1,5 @@
-use super::{Error, OptionCode};
-use std::convert::TryFrom;
+use super::{Error, OptionCode, util};
+use util::Deserialize;
 
 /// The PCP operation
 ///
@@ -40,15 +40,14 @@ impl OpCode {
     }
 }
 
-impl TryFrom<u8> for OpCode {
-    type Error = Error;
-
-    fn try_from(val: u8) -> Result<Self, Self::Error> {
+impl Deserialize<OpCode> for &[u8] {
+    fn de(&mut self) -> util::Result<OpCode> {
+        let [val]: [_; 1] = self.de()?;
         match val {
-            0 => Ok(Self::Announce),
-            1 => Ok(Self::Map),
-            2 => Ok(Self::Peer),
-            n => Err(Error::NotAnOpCode(n)),
+            0 => Ok(OpCode::Announce),
+            1 => Ok(OpCode::Map),
+            2 => Ok(OpCode::Peer),
+            n => Err(Error::InvalidOpCode(n)),
         }
     }
 }
