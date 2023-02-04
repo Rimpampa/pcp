@@ -4,6 +4,11 @@ use super::Error::{self, InvalidSliceSize};
 
 pub type Result<T> = core::result::Result<T, Error>;
 
+trait Deserializable: Sized {
+    fn size(&self) -> usize;
+    fn deserialize(data: &[u8]) -> Result<Self>;
+}
+
 pub trait DeserializeSkip<Out>: Deserialize<Out> {
     fn skip(&mut self, times: usize) -> Result<&mut Self> {
         match (0..times).flat_map(|_| self.de().err()).next() {
@@ -19,11 +24,25 @@ pub trait Deserialize<Out> {
     fn de(&mut self) -> Result<Out>;
 }
 
+impl Deserialize<()> for &[u8] {
+    fn de(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
 impl<const S: usize> Deserialize<[u8; S]> for &[u8] {
     fn de(&mut self) -> Result<[u8; S]> {
         let arr = self.get(..S).ok_or(InvalidSliceSize(self.len(), S))?;
         *self = &self[S..];
         Ok(arr.try_into().unwrap())
+    }
+}
+
+impl<const S: usize> Deserialize<heapless::Vec<u8, S>> for &[u8] {
+    fn de(&mut self) -> Result<heapless::Vec<u8, S>> {
+        let arr = self.get(..S).ok_or(InvalidSliceSize(self.len(), S))?;
+        *self = &self[S..];
+        Ok(heapless::Vec::from_slice(arr).unwrap())
     }
 }
 
@@ -56,6 +75,12 @@ pub trait Serialize<In> {
     fn se(&mut self, value: In) -> Result<&mut Self>;
 }
 
+impl Serialize<()> for [u8] {
+    fn se(&mut self, _: ()) -> Result<&mut Self> {
+        Ok(self)
+    }
+}
+
 impl Serialize<&[u8]> for [u8] {
     fn se(&mut self, value: &[u8]) -> Result<&mut Self> {
         if self.len() < value.len() {
@@ -63,6 +88,12 @@ impl Serialize<&[u8]> for [u8] {
         }
         self[..value.len()].copy_from_slice(&value);
         Ok(&mut self[value.len()..])
+    }
+}
+
+impl<const S: usize> Serialize<heapless::Vec<u8, S>> for [u8] {
+    fn se(&mut self, value: heapless::Vec<u8, S>) -> Result<&mut Self> {
+        self.se(&value[..])
     }
 }
 

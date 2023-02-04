@@ -1,4 +1,4 @@
-use super::{Error, util};
+use super::{Error, util::{self, Serialize}};
 use util::Deserialize;
 
 /// The `OptionCode` field contained in the PCP option header (see `OptionHeader`)
@@ -23,5 +23,11 @@ impl Deserialize<OptionCode> for &[u8] {
             3 => Ok(OptionCode::Filter),
             n => Err(Error::InvalidOptionCode(n)),
         }
+    }
+}
+
+impl Serialize<OptionCode> for [u8] {
+    fn se(&mut self, value: OptionCode) -> util::Result<&mut Self> {
+        self.se(value as u8)
     }
 }

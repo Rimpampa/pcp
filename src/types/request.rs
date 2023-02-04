@@ -167,8 +167,10 @@ pub struct Peer {
     /// If the PCP client does not know
     /// the external address, or does not have a preference, it **must** use
     /// the address-family-specific all-zeros address, which is
-    /// [`Ipv4Addr::UNSPECIFIED`](std::net::Ipv4Addr::UNSPECIFIED) for IPv4 and
-    /// [`Ipv6Addr::UNSPECIFIED`](std::net::Ipv6Addr::UNSPECIFIED) for IPv6
+    /// [`Ipv4Addr::UNSPECIFIED`] for IPv4 and [`Ipv6Addr::UNSPECIFIED`] for IPv6.
+    ///
+    /// [`Ipv4Addr::UNSPECIFIED`]: std::net::Ipv4Addr::UNSPECIFIED
+    /// [`Ipv6Addr::UNSPECIFIED`]: std::net::Ipv6Addr::UNSPECIFIED
     pub suggested_external_addr: Ipv6Addr,
     pub remote_peer_port: u16,
     pub remote_peer_addr: Ipv6Addr,
@@ -206,53 +208,52 @@ impl Deserialize<Peer> for &[u8] {
     }
 }
 
-/// Generic payload + options data strcuture
+/// Payload + raw options pair
 ///
 /// This struct contains the payload as a parsed value of type `T`
-/// and the options as an array of `SIZE` bytes.
+/// and the options as an array of bytes that should be big enough to
+/// hold the maximum size of the options given the [`MAX_PACKET_SIZE`]
+/// limit.
 ///
 /// The options are not parsed because it cannot be known how many of
 /// them there will be and of what type, use the [`options()`] method
-/// to parse them.
+/// to get an iterator of parsed options.
 #[derive(PartialEq, Debug)]
 pub struct Payload<T, const SIZE: usize> {
     /// Parsed payload data
     pub data: T,
     /// Raw options
-    pub raw_options: ([u8; SIZE], usize),
+    pub raw_options: heapless::Vec<u8, SIZE>,
 }
 
-pub type MapPayload = Payload<Map, { MAX_REQUEST_PAYLOAD_SIZE - Map::SIZE }>;
+const fn max_options_size(payload_size: usize) -> usize {
+    MAX_PACKET_SIZE - Request::HEADER_SIZE - payload_size
+}
 
-pub type PeerPayload = Payload<Peer, { MAX_REQUEST_PAYLOAD_SIZE - Peer::SIZE }>;
+pub type MapPayload = Payload<Map, { max_options_size(Map::SIZE) }>;
 
-pub type AnnouncePayload = Payload<[u8; 0], MAX_REQUEST_PAYLOAD_SIZE>;
+pub type PeerPayload = Payload<Peer, { max_options_size(Peer::SIZE) }>;
+
+pub type AnnouncePayload = Payload<(), { max_options_size(0) }>;
 
 impl<T, const SIZE: usize> Serialize<Payload<T, SIZE>> for [u8]
 where
     [u8]: Serialize<T> + for<'a> Serialize<&'a [u8]>,
 {
     fn se(&mut self, payload: Payload<T, SIZE>) -> util::Result<&mut Self> {
-        let (opt, len) = &payload.raw_options;
-        self.se(payload.data)?.se(&opt[..*len])
+        self.se(payload.data)?.se(payload.raw_options.as_slice())
     }
 }
 
-impl<T, const SIZE: usize> Deserialize<Payload<T, SIZE>> for [u8]
+impl<T, const SIZE: usize> Deserialize<Payload<T, SIZE>> for &[u8]
 where
-    [u8]: Deserialize<T>,
+    for<'a> &'a [u8]: Deserialize<T> + Deserialize<heapless::Vec<u8, SIZE>>,
 {
     fn de(&mut self) -> util::Result<Payload<T, SIZE>> {
-        let data = self.de()?;
-        if self.len() > SIZE {
-            return Err(Error::InvalidSliceSize(self.len(), SIZE))
-        }
-        let mut array = [0; SIZE];
-        array[..self.len()].copy_from_slice(self);
         Ok({
             Payload {
-                data,
-                raw_options: (array, self.len()),
+                data: self.de()?,
+                raw_options: self.de()?,
             }
         })
     }
@@ -276,6 +277,7 @@ pub enum RequestPayload {
 }
 
 impl RequestPayload {
+    /// Returns the [`OpCode`] of this request
     pub const fn opcode(&self) -> OpCode {
         match self {
             Self::Map(_) => OpCode::Map,
@@ -338,6 +340,7 @@ pub struct Request {
 }
 
 impl Request {
+    /// Size of the PCP request header in bytes
     pub const HEADER_SIZE: usize = 24;
 }
 

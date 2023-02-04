@@ -151,8 +151,6 @@ impl Deserialize<PreferFailure> for &[u8] {
 /// PCP options extend the contents of a PCP packet by
 /// specifying special beheviours which is not always needed.
 ///
-///
-///
 /// # Format
 ///
 /// ```plain

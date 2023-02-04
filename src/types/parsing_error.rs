@@ -9,14 +9,23 @@ pub enum Error {
     InvalidProtocolNumber(u8),
     InvalidSliceSize(usize, usize),
     InvalidOptionLength(OptionCode, usize),
+    /// The mask prefix is not valid
+    /// 
+    /// This may happen because the IP address is an
+    /// IPv6 mapped IPv4 address which has a minimum prefix
+    /// mask bitsize of `96`
     InvalidPrefix(u8),
+    /// The option code is not valid for the opcode
     InvalidOption(OpCode, OptionCode),
     VersionNotSupported(u8),
-    /// The R field of the response message header is not 1
+    /// The packet is not a response
+    /// 
+    /// The `R` flag of the response message header is not set
     NotAResponse,
-    /// The R field of the request message header is not 0
+    /// The packet is not a request
+    /// 
+    /// The `R` flag of the request message header is not clear
     NotARequest,
-    /// The option code (2nd) is not valid for that opcode (1st)
     /// The constructed packet is too big
     PacketTooBig(usize),
 }
