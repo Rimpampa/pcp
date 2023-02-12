@@ -1,8 +1,8 @@
-use super::ParsingError;
-use std::convert::TryFrom;
 use std::fmt;
 
-/// The `ResultCode` field contained in the PCP response packets, in the header (see `ResponseHeader`)
+use super::{util, Error};
+use util::{Deserializer, Serializer};
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ResultCode {
     /// Success
@@ -108,28 +108,30 @@ impl fmt::Display for ResultCode {
     }
 }
 
-impl TryFrom<u8> for ResultCode {
-    type Error = ParsingError;
-
-    fn try_from(val: u8) -> Result<ResultCode, Self::Error> {
-        use ResultCode::*;
-
-        match val {
-            0 => Ok(Success),
-            1 => Ok(UnsuppVersion),
-            2 => Ok(NotAuthorized),
-            3 => Ok(MalformedRequest),
-            4 => Ok(UnsuppCode),
-            5 => Ok(UnsuppOption),
-            6 => Ok(MalformedOption),
-            7 => Ok(NetworkFailure),
-            8 => Ok(NoResources),
-            9 => Ok(UnsuppProtocol),
-            10 => Ok(UserExQuota),
-            11 => Ok(CannotProvideExternal),
-            12 => Ok(AddressMismatch),
-            13 => Ok(ExcessiveRemotePeers),
-            n => Err(ParsingError::NotAResultCode(n)),
+impl util::Deserialize for ResultCode {
+    fn deserialize(data: &mut Deserializer) -> util::Result<Self> {
+        match data.deserialize()? {
+            0 => Ok(Self::Success),
+            1 => Ok(Self::UnsuppVersion),
+            2 => Ok(Self::NotAuthorized),
+            3 => Ok(Self::MalformedRequest),
+            4 => Ok(Self::UnsuppCode),
+            5 => Ok(Self::UnsuppOption),
+            6 => Ok(Self::MalformedOption),
+            7 => Ok(Self::NetworkFailure),
+            8 => Ok(Self::NoResources),
+            9 => Ok(Self::UnsuppProtocol),
+            10 => Ok(Self::UserExQuota),
+            11 => Ok(Self::CannotProvideExternal),
+            12 => Ok(Self::AddressMismatch),
+            13 => Ok(Self::ExcessiveRemotePeers),
+            n => Err(Error::InvalidResultCode(n)),
         }
+    }
+}
+
+impl util::Serialize for ResultCode {
+    fn serialize<const S: usize>(self, buffer: Serializer<S>) -> util::Result<Serializer<S>> {
+        buffer.serialize(self as u8)
     }
 }
