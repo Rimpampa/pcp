@@ -47,7 +47,7 @@ pub struct MappingState {
 impl MappingState {
     pub fn new(request: RequestPacket, delay: Delay, kind: RequestKind) -> Self {
         let mut buffer = [0; MAX_PACKET_SIZE];
-        request.copy_to(&mut buffer);
+        request.serialize(&mut buffer);
         Self {
             state: State::Starting(0),
             size: request.size(),
@@ -63,7 +63,7 @@ impl MappingState {
     pub fn bytes(&mut self) -> &[u8] {
         if self.size == 0 {
             self.update_size();
-            self.request.copy_to(&mut self.buffer);
+            self.request.serialize(&mut self.buffer);
         }
         &self.buffer[..self.size]
     }
