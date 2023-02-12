@@ -1,5 +1,5 @@
-use super::ParsingError;
-use std::convert::TryFrom;
+use super::{util, Error};
+use util::{Deserializer, Serializer};
 
 /// The `OptionCode` field contained in the PCP option header (see `OptionHeader`)
 ///
@@ -15,15 +15,19 @@ pub enum OptionCode {
     Filter = 3,
 }
 
-impl TryFrom<u8> for OptionCode {
-    type Error = ParsingError;
-
-    fn try_from(val: u8) -> Result<Self, Self::Error> {
-        match val {
+impl util::Deserialize for OptionCode {
+    fn deserialize(data: &mut Deserializer) -> util::Result<Self> {
+        match data.deserialize()? {
             1 => Ok(Self::ThirdParty),
             2 => Ok(Self::PreferFailure),
             3 => Ok(Self::Filter),
-            n => Err(ParsingError::NotAnOptionCode(n)),
+            n => Err(Error::InvalidOptionCode(n)),
         }
+    }
+}
+
+impl util::Serialize for OptionCode {
+    fn serialize<const S: usize>(self, buffer: Serializer<S>) -> util::Result<Serializer<S>> {
+        buffer.serialize(self as u8)
     }
 }
