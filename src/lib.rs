@@ -97,7 +97,7 @@
 // mod handle;
 // mod map;
 // mod state;
-pub mod types;
+pub mod core;
 
 // pub use client::Client;
 // pub use event::{ClientEvent, MapEvent, MapEventKind};
