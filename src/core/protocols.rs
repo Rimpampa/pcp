@@ -1,8 +1,9 @@
-use std::convert::TryFrom;
-
-use super::ParsingError;
+use super::{util, Error};
 
 /// All the IP protocol numbers defined by the IANA
+///
+/// The list is taken from here
+/// https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum ProtocolNumber {
     /// IPv6 Hop-by-Hop Option, IPv6 extension header, [RFC8200]
@@ -299,13 +300,10 @@ pub enum ProtocolNumber {
     Test2 = 254,
 }
 
-impl TryFrom<u8> for ProtocolNumber {
-    type Error = ParsingError;
-
-    fn try_from(val: u8) -> Result<ProtocolNumber, Self::Error> {
-        use ParsingError::*;
+impl util::Deserialize for ProtocolNumber {
+    fn deserialize(data: &mut util::Deserializer) -> util::Result<Self> {
         use ProtocolNumber::*;
-        match val {
+        match data.deserialize()? {
             0 => Ok(Hopopt),
             1 => Ok(Icmp),
             2 => Ok(Igmp),
@@ -452,7 +450,7 @@ impl TryFrom<u8> for ProtocolNumber {
             143 => Ok(Ethernet),
             253 => Ok(Test1),
             254 => Ok(Test2),
-            n => Err(NotAProtocolNumber(n)),
+            n => Err(Error::InvalidProtocolNumber(n)),
         }
     }
 }
