@@ -57,6 +57,9 @@ pub use payload::Payload;
 pub mod request;
 pub use request::Request;
 
+pub mod response;
+pub use response::Response;
+
 /// Maximum size a PCP UDP packet can have
 pub const MAX_PACKET_SIZE: usize = 1100;
 
