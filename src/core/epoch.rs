@@ -23,9 +23,9 @@ impl Epoch {
     /// while `elapsed` paramter is the elapsed time according to the **client**
     pub fn validate_epoch(&self, previous: Epoch, elapsed: u32) -> bool {
         // RFC 6887, Section 8.5:
-        // Whenever a client receives a PCP response, the client validates the
-        // received Epoch Time value according to the procedure below, using
-        // integer arithmetic
+        // > Whenever a client receives a PCP response, the client validates the
+        // > received Epoch Time value according to the procedure below, using
+        // > integer arithmetic
 
         // RFC 6887, Section 8.5:
         // > If this is the first PCP response the client has received from

@@ -1,7 +1,8 @@
 use std::net::Ipv6Addr;
 
 use super::{
-    op_code::ROpCode, payload::Payload, util, Epoch, Error, OpCode, ProtocolNumber, ResultCode,
+    op_code::ROpCode, payload::Payload, request, util, Epoch, Error, OpCode, ProtocolNumber,
+    ResultCode,
 };
 use util::{Deserializer, Serializer};
 
@@ -32,7 +33,7 @@ pub type Nonce = [u8; 12];
 #[derive(PartialEq, Debug)]
 pub struct Map {
     /// Random data, copied from the corresponding request
-    pub nonce: Nonce,
+    pub mapping_nonce: Nonce,
     /// Protocol number, copied from the corresponding request
     pub protocol: ProtocolNumber,
     /// Internal port number, copied from the corresponding request
@@ -52,12 +53,27 @@ pub struct Map {
 
 impl Map {
     pub const SIZE: usize = 36;
+
+    pub fn matches(&self, request: &request::Map) -> bool {
+        // RFC 6887, Section 11.4:
+        // > [...] the response is further matched with a previously sent MAP
+        // > request by comparing the internal IP address (the destination IP
+        // > address of the PCP response, or other IP address specified via the
+        // > THIRD_PARTY option), the protocol, the internal port, and the
+        // > mapping nonce. Other fields are not compared, because the PCP
+        // > server sets those fields
+        // NOTE: the _internal IP address_ is part of the header
+        // TODO: handle THIRD_PARTY option
+        self.mapping_nonce == request.mapping_nonce
+            && self.protocol == request.protocol
+            && self.internal_port == request.internal_port
+    }
 }
 
 impl util::Serialize for &Map {
     fn serialize<const S: usize>(self, buffer: Serializer<S>) -> util::Result<Serializer<S>> {
         buffer
-            .serialize(self.nonce)?
+            .serialize(self.mapping_nonce)?
             .serialize(self.protocol as u8)?
             .serialize([0u8; 3])?
             .serialize(self.internal_port)?
@@ -69,7 +85,7 @@ impl util::Serialize for &Map {
 impl util::Deserialize for Map {
     fn deserialize(data: &mut Deserializer) -> util::Result<Self> {
         Ok(Self {
-            nonce: data.deserialize()?,
+            mapping_nonce: data.deserialize()?,
             protocol: data.deserialize()?,
             internal_port: data.skip(3)?.deserialize()?,
             assigned_external_port: data.deserialize()?,
@@ -280,6 +296,25 @@ pub struct Response {
 impl Response {
     /// Size of the PCP request header in bytes
     pub const HEADER_SIZE: usize = 24;
+
+    // pub fn matches(&self, request: &request::Request) -> bool {
+    //     fn match_options(
+    //         response: impl Iterator<Item = super::Option>,
+    //         mut request: impl Iterator<Item = super::Option>,
+    //     ) -> bool {
+    //         response
+    //             .map(|res| request.find(|req| *req == res))
+    //             .all(|o| o.is_some())
+    //     }
+    //     use ResponsePayload as Res;
+    //     use request::RequestPayload as Req;
+    //     match (self.payload, request.payload) {
+    //         (Res::Map(res), Req::Map(req)) => res.data.matches(&req.data) && match_options(res.options(), req.options()),
+    //         (Res::Peer(res), Req::Peer(req)) => res.data.matches(&req.data) && match_options(res.options(), req.options()),
+    //         (Res::Announce(res), Req::Announce(req)) => res.data.matches(&req.data) && match_options(res.options(), req.options()),
+    //         (_, _) => false,
+    //     }
+    // }
 }
 
 impl util::Serialize for &Response {

@@ -256,3 +256,38 @@ impl From<PreferFailure> for Option {
         Self::PreferFailure(v)
     }
 }
+
+pub struct RawOption<'a> {
+    bytes: &'a [u8],
+}
+
+impl RawOption<'_> {
+    pub fn option_code(&self) -> u8 {
+        self.bytes[0]
+    }
+
+    pub fn length(&self) -> u16 {
+        u16::from_be_bytes([self.bytes[2], self.bytes[3]])
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.bytes[4..][..self.length() as usize]
+    }
+}
+
+impl PartialEq for RawOption<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.option_code() == other.option_code() && self.data() == other.data()
+    }
+}
+
+// impl<'a> util::Deserialize<'a> for RawOption<'a> {
+//     fn deserialize(data: &'a mut Deserializer<'_>) -> util::Result<Self> {
+//         let header = data.peek(4)?;
+//         let length = u16::from_be_bytes([header[2], header[3]]);
+//         let length = length + ((4 - (length % 4)) % 4);
+//         Ok(Self {
+//             bytes: data.advance(length as usize)?,
+//         })
+//     }
+// }

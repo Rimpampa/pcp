@@ -1,6 +1,6 @@
 use std::{iter, ops::Not};
 
-use super::{util, Option};
+use super::{option::RawOption, util, Error::NotEnoughSpace};
 use util::{Deserializer, Serializer};
 
 /// Payload + raw options pair
@@ -23,13 +23,46 @@ pub struct Payload<T, const SIZE: usize> {
 
 impl<T, const SIZE: usize> Payload<T, SIZE> {
     /// Get the options conatined in this packet
-    pub fn options(&self) -> impl Iterator<Item = util::Result<Option>> + '_ {
-        let mut de = util::Deserializer::new(&self.raw_options);
+    pub fn options(&self) -> impl Iterator<Item = util::Result<super::Option>> + '_ {
+        let mut de = Deserializer::new(&self.raw_options);
         iter::from_fn(move || de.is_empty().not().then(|| de.deserialize()))
     }
 
+    /// Get the options conatined in this packet
+    pub fn raw_options<'a>(&'a self) -> impl Iterator<Item = util::Result<RawOption<'a>>> + 'a {
+        fn raw_option<'a>(bytes: &'a [u8]) -> (util::Result<RawOption<'a>>, &'a [u8]) {
+            fn inner<'a>(de: &'a mut Deserializer<'a>) -> util::Result<RawOption<'a>> {
+                let header = de.peek(4)?;
+                let length = u16::from_be_bytes([header[2], header[3]]);
+                let length = length + ((4 - (length % 4)) % 4);
+                Ok(RawOption { bytes: de.advance(length.into())? })
+            }
+            let mut de: Deserializer<'a> = Deserializer::new(bytes);
+            let option = inner(&mut de);
+            let len = de.len();
+            (option, &bytes[bytes.len() - len ..])
+        }
+        [].into_iter()
+
+        // iter::successors(raw_option(self), |o| o.)
+
+        // let mut de = Deserializer::new(&self.raw_options);
+        // iter::from_fn(move || {
+        //     if de.is_empty() {
+        //         return None;
+        //     }
+        //     let header = match de.peek(4) {
+        //         Err(e) => return Some(Err(e)),
+        //         Ok(d) => d,
+        //     };
+        //     let length = u16::from_be_bytes([header[2], header[3]]);
+        //     let length = length + ((4 - (length % 4)) % 4);
+        //     Some(de.advance(length as usize).map(|bytes| RawOption { bytes }))
+        // })
+    }
+
     /// Add an [`Option`] to the pyload
-    pub fn with(&mut self, option: Option) -> util::Result<()> {
+    pub fn with(&mut self, option: super::Option) -> util::Result<()> {
         Serializer::new(&mut self.raw_options)
             .serialize(option)
             .and(Ok(()))

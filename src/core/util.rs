@@ -16,6 +16,10 @@ impl<'a> Deserializer<'a> {
         self.0.is_empty()
     }
 
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn skip(&mut self, by: usize) -> Result<&mut Self> {
         self.advance(by)?;
         Ok(self)
@@ -34,7 +38,14 @@ impl<'a> Deserializer<'a> {
         self.advance(by.min(self.0.len())).unwrap()
     }
 
-    pub fn deserialize<T: Deserialize>(&mut self) -> Result<T> {
+    pub fn peek(&self, by: usize) -> Result<&[u8]> {
+        if let Some(extra) = by.checked_sub(self.0.len()) {
+            return Err(NotEnoughSpace(extra));
+        }
+        Ok(&self.0[..by])
+    }
+
+    pub fn deserialize<T: for<'b> Deserialize>(&mut self) -> Result<T> {
         T::deserialize(self)
     }
 }
