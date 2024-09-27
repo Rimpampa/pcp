@@ -2,6 +2,9 @@ use super::{Error, util};
 use util::Deserialize;
 
 /// All the IP protocol numbers defined by the IANA
+/// 
+/// The list is taken from here
+/// https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum ProtocolNumber {
     /// IPv6 Hop-by-Hop Option, IPv6 extension header, [RFC8200]

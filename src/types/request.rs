@@ -1,4 +1,4 @@
-use std::net::Ipv6Addr;
+use std::{net::Ipv6Addr, num::NonZeroU16};
 
 use crate::types::{util, ProtocolNumber};
 use util::{Deserialize, DeserializeSkip, Serialize};
@@ -7,8 +7,6 @@ use super::{Error, OpCode};
 
 /// Maximum size a PCP packet can have
 pub const MAX_PACKET_SIZE: usize = 1100;
-
-const MAX_REQUEST_PAYLOAD_SIZE: usize = MAX_PACKET_SIZE - Request::HEADER_SIZE;
 
 // const MAX_RESPONSE_PAYLOAD_SIZE: usize = MAX_PACKET_SIZE - ResponseHeader::SIZE;
 
@@ -71,8 +69,13 @@ pub struct Map {
     /// If the PCP client does not know
     /// the external address, or does not have a preference, it **must** use
     /// the address-family-specific all-zeros address, which is
-    /// [`Ipv4Addr::UNSPECIFIED`](std::net::Ipv4Addr::UNSPECIFIED) for IPv4 and
-    /// [`Ipv6Addr::UNSPECIFIED`](std::net::Ipv6Addr::UNSPECIFIED) for IPv6
+    /// [`Ipv4Addr::UNSPECIFIED`] for IPv4 and [`Ipv6Addr::UNSPECIFIED`] for IPv6.
+    ///
+    /// An IPv6 address is represented directly, and an IPv4 address is represented
+    /// using the IPv4-mapped address syntax, check [`Ipv4Addr::to_ipv6_mapped`].
+    ///
+    /// [`Ipv4Addr::UNSPECIFIED`]: std::net::Ipv4Addr::UNSPECIFIED
+    /// [`Ipv6Addr::UNSPECIFIED`]: std::net::Ipv6Addr::UNSPECIFIED
     pub suggested_external_addr: Ipv6Addr,
 }
 
@@ -169,10 +172,27 @@ pub struct Peer {
     /// the address-family-specific all-zeros address, which is
     /// [`Ipv4Addr::UNSPECIFIED`] for IPv4 and [`Ipv6Addr::UNSPECIFIED`] for IPv6.
     ///
+    /// An IPv6 address is represented directly, and an IPv4 address is represented
+    /// using the IPv4-mapped address syntax, check [`Ipv4Addr::to_ipv6_mapped`].
+    ///
     /// [`Ipv4Addr::UNSPECIFIED`]: std::net::Ipv4Addr::UNSPECIFIED
     /// [`Ipv6Addr::UNSPECIFIED`]: std::net::Ipv6Addr::UNSPECIFIED
     pub suggested_external_addr: Ipv6Addr,
-    pub remote_peer_port: u16,
+    /// Remote peer's port for the mapping
+    pub remote_peer_port: NonZeroU16,
+    /// Remote peer's IP address.
+    /// 
+    /// This is from the perspective of the PCP client,
+    /// so that the PCP client does not need to concern itself with
+    /// NAT64 or NAT46 (which both cause the client's idea of the
+    /// remote peer's IP address to differ from the remote peer's actual
+    /// IP address).
+    /// 
+    /// This field allows the PCP client and PCP server to disambiguate multiple
+    /// connections from the same port on the internal host to different servers.
+    /// 
+    /// An IPv6 address is represented directly, and an IPv4 address is represented
+    /// using the IPv4-mapped address syntax, check [`Ipv4Addr::to_ipv6_mapped`].
     pub remote_peer_addr: Ipv6Addr,
 }
 
@@ -188,7 +208,7 @@ impl Serialize<Peer> for [u8] {
             .se(peer.internal_port)?
             .se(peer.suggested_external_port)?
             .se(peer.suggested_external_addr)?
-            .se(peer.remote_peer_port)?
+            .se(u16::from(peer.remote_peer_port))?
             .se([0; 2])?
             .se(peer.remote_peer_addr)
     }
@@ -202,7 +222,7 @@ impl Deserialize<Peer> for &[u8] {
             internal_port: self.skip(3)?.de()?,
             suggested_external_port: self.de()?,
             suggested_external_addr: self.de()?,
-            remote_peer_port: self.de()?,
+            remote_peer_port: NonZeroU16::new(self.de()?).ok_or(Error::ZeroRemotePeerPort)?,
             remote_peer_addr: self.skip(2)?.de()?,
         })
     }
@@ -226,14 +246,19 @@ pub struct Payload<T, const SIZE: usize> {
     pub raw_options: heapless::Vec<u8, SIZE>,
 }
 
+/// Returns the maximum size the options can take up in the packet,
+/// considering the given payload size and the constant header size
 const fn max_options_size(payload_size: usize) -> usize {
     MAX_PACKET_SIZE - Request::HEADER_SIZE - payload_size
 }
 
+/// [`Payload`] for a PCP map request
 pub type MapPayload = Payload<Map, { max_options_size(Map::SIZE) }>;
 
+/// [`Payload`] for a PCP peer request
 pub type PeerPayload = Payload<Peer, { max_options_size(Peer::SIZE) }>;
 
+/// [`Payload`] for a PCP announce request
 pub type AnnouncePayload = Payload<(), { max_options_size(0) }>;
 
 impl<T, const SIZE: usize> Serialize<Payload<T, SIZE>> for [u8]

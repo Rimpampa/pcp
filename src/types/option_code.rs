@@ -1,17 +1,11 @@
 use super::{Error, util::{self, Serialize}};
 use util::Deserialize;
 
-/// The `OptionCode` field contained in the PCP option header (see `OptionHeader`)
-///
-/// Currently only three option codes are defined
+/// TODO
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OptionCode {
-    /// Indicates the MAP or PEER request is for a host other than the host sending the PCP option
     ThirdParty = 1,
-    /// indicates that the PCP server should not create an alternative mapping if the
-    /// suggested external port and address cannot be mapped
     PreferFailure = 2,
-    /// specifies a filter for incoming packets
     Filter = 3,
 }
 
